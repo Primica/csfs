@@ -177,14 +177,55 @@ static int cmd_mkdir(Shell *shell, Command *cmd) {
     return ret;
 }
 
+static void basename_from_path(const char *path, char *out, size_t out_size) {
+    const char *slash = strrchr(path, '/');
+    if (!slash) {
+        strncpy(out, path, out_size - 1);
+    } else {
+        strncpy(out, slash + 1, out_size - 1);
+    }
+    out[out_size - 1] = '\0';
+}
+
 static int cmd_add(Shell *shell, Command *cmd) {
-    if (cmd->argc < 3) {
-        fprintf(stderr, "add: arguments requis (chemin_fs et fichier source)\n");
+    if (cmd->argc < 2) {
+        fprintf(stderr, "add: usage -> add <fichier_source> [chemin_fs]\n");
         return -1;
     }
 
-    char *resolved = resolve_path(shell, cmd->args[1]);
-    int ret = fs_add_file(shell->fs, resolved, cmd->args[2]);
+    const char *src_path = cmd->args[1];
+
+    char dest_path[MAX_PATH];
+    if (cmd->argc == 2) {
+        // Pas de destination fournie : utiliser le répertoire courant + basename
+        char base[MAX_FILENAME];
+        basename_from_path(src_path, base, sizeof(base));
+        if (strcmp(shell->current_path, "/") == 0) {
+            snprintf(dest_path, sizeof(dest_path), "/%s", base);
+        } else {
+            snprintf(dest_path, sizeof(dest_path), "%s/%s", shell->current_path, base);
+        }
+    } else {
+        // Destination fournie
+        strncpy(dest_path, cmd->args[2], sizeof(dest_path) - 1);
+        dest_path[sizeof(dest_path) - 1] = '\0';
+
+        // Si la destination se termine par '/', on ajoute le basename du fichier source
+        size_t len = strlen(dest_path);
+        if (len > 0 && dest_path[len - 1] == '/') {
+            char base[MAX_FILENAME];
+            basename_from_path(src_path, base, sizeof(base));
+            if (len == 1) {
+                // destination = "/"
+                snprintf(dest_path, sizeof(dest_path), "/%s", base);
+            } else {
+                strncat(dest_path, base, sizeof(dest_path) - strlen(dest_path) - 1);
+            }
+        }
+    }
+
+    char *resolved = resolve_path(shell, dest_path);
+    int ret = fs_add_file(shell->fs, resolved, src_path);
     free(resolved);
     return ret;
 }
