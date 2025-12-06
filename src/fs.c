@@ -5,6 +5,88 @@
 #include <string.h>
 #include <time.h>
 
+static char *normalize_path(const char *path) {
+    char *normalized = malloc(MAX_PATH);
+    if (!normalized) return NULL;
+
+    strncpy(normalized, path, MAX_PATH - 1);
+    normalized[MAX_PATH - 1] = '\0';
+
+    // Remove trailing slash unless it's root
+    size_t len = strlen(normalized);
+    if (len > 1 && normalized[len - 1] == '/') {
+        normalized[len - 1] = '\0';
+    }
+
+    // Ensure it starts with /
+    if (normalized[0] != '/') {
+        char temp[MAX_PATH];
+        snprintf(temp, MAX_PATH, "/%s", normalized);
+        strncpy(normalized, temp, MAX_PATH - 1);
+    }
+
+    return normalized;
+}
+
+static void extract_filename(const char *path, char *name, size_t size) {
+    const char *slash = strrchr(path, '/');
+    if (!slash || slash[1] == '\0') {
+        // No slash, or trailing slash
+        strncpy(name, path, size - 1);
+    } else {
+        // Copy from after the slash
+        strncpy(name, slash + 1, size - 1);
+    }
+    name[size - 1] = '\0';
+}
+
+static void extract_parent_path(const char *path, char *parent, size_t size) {
+    char *normalized = normalize_path(path);
+    const char *last_slash = strrchr(normalized, '/');
+
+    if (!last_slash) {
+        // No slash found, parent is root
+        strncpy(parent, "/", size - 1);
+    } else if (last_slash == normalized) {
+        // Slash is at the beginning (e.g., "/docs")
+        strncpy(parent, "/", size - 1);
+    } else {
+        // Copy up to the last slash
+        size_t len = last_slash - normalized;
+        strncpy(parent, normalized, len);
+        parent[len] = '\0';
+    }
+    parent[size - 1] = '\0';
+    free(normalized);
+}
+
+static int path_exists(FileSystem *fs, const char *path, int *is_dir) {
+    char *normalized = normalize_path(path);
+    for (int i = 0; i < MAX_FILES; i++) {
+        if (fs->inodes[i].filename[0] != '\0') {
+            char full_path[MAX_PATH];
+            if (strcmp(fs->inodes[i].parent_path, "/") == 0) {
+                snprintf(full_path, MAX_PATH, "/%s", fs->inodes[i].filename);
+            } else {
+                snprintf(full_path, MAX_PATH, "%s/%s", fs->inodes[i].parent_path,
+                         fs->inodes[i].filename);
+            }
+            if (strcmp(full_path, normalized) == 0) {
+                if (is_dir) *is_dir = fs->inodes[i].is_directory;
+                free(normalized);
+                return i;
+            }
+        }
+    }
+    free(normalized);
+    return -1;
+}
+
+static int parent_exists(FileSystem *fs, const char *parent_path) {
+    if (strcmp(parent_path, "/") == 0) return 1;
+    return path_exists(fs, parent_path, NULL) >= 0;
+}
+
 int fs_create(const char *path) {
     FILE *f = fopen(path, "wb");
     if (!f) {
@@ -104,7 +186,53 @@ static uint64_t find_data_end(const FileSystem *fs) {
     return offset;
 }
 
-int fs_add_file(FileSystem *fs, const char *filename, const char *source_path) {
+int fs_mkdir(FileSystem *fs, const char *path) {
+    char *normalized = normalize_path(path);
+    char parent_path[MAX_PATH];
+    char dirname[MAX_FILENAME];
+
+    extract_parent_path(normalized, parent_path, MAX_PATH);
+    extract_filename(normalized, dirname, MAX_FILENAME);
+
+    // Check if directory already exists
+    if (path_exists(fs, normalized, NULL) >= 0) {
+        fprintf(stderr, "Erreur : '%s' existe déjà\n", normalized);
+        free(normalized);
+        return -1;
+    }
+
+    // Check if parent exists
+    if (!parent_exists(fs, parent_path)) {
+        fprintf(stderr, "Erreur : le répertoire parent '%s' n'existe pas\n", parent_path);
+        free(normalized);
+        return -1;
+    }
+
+    int idx = find_free_inode(fs);
+    if (idx == -1) {
+        fprintf(stderr, "Erreur : pas d'inode disponible\n");
+        free(normalized);
+        return -1;
+    }
+
+    strncpy(fs->inodes[idx].filename, dirname, MAX_FILENAME - 1);
+    fs->inodes[idx].filename[MAX_FILENAME - 1] = '\0';
+    strncpy(fs->inodes[idx].parent_path, parent_path, MAX_PATH - 1);
+    fs->inodes[idx].parent_path[MAX_PATH - 1] = '\0';
+    fs->inodes[idx].is_directory = 1;
+    fs->inodes[idx].size = 0;
+    fs->inodes[idx].offset = 0;
+    fs->inodes[idx].created = time(NULL);
+    fs->inodes[idx].modified = fs->inodes[idx].created;
+
+    fs->sb.num_files++;
+
+    printf("Répertoire créé : %s\n", normalized);
+    free(normalized);
+    return 0;
+}
+
+int fs_add_file(FileSystem *fs, const char *fs_path, const char *source_path) {
     if (fs->sb.num_files >= fs->sb.max_files) {
         fprintf(stderr, "Erreur : système de fichiers plein\n");
         return -1;
@@ -116,6 +244,29 @@ int fs_add_file(FileSystem *fs, const char *filename, const char *source_path) {
         return -1;
     }
 
+    char *normalized = normalize_path(fs_path);
+    char parent_path[MAX_PATH];
+    char filename[MAX_FILENAME];
+
+    extract_parent_path(normalized, parent_path, MAX_PATH);
+    extract_filename(normalized, filename, MAX_FILENAME);
+
+    // Check if file already exists
+    if (path_exists(fs, normalized, NULL) >= 0) {
+        fprintf(stderr, "Erreur : '%s' existe déjà\n", normalized);
+        fclose(src);
+        free(normalized);
+        return -1;
+    }
+
+    // Check if parent directory exists
+    if (!parent_exists(fs, parent_path)) {
+        fprintf(stderr, "Erreur : le répertoire parent '%s' n'existe pas\n", parent_path);
+        fclose(src);
+        free(normalized);
+        return -1;
+    }
+
     fseek(src, 0, SEEK_END);
     uint64_t size = (uint64_t)ftell(src);
     fseek(src, 0, SEEK_SET);
@@ -124,6 +275,7 @@ int fs_add_file(FileSystem *fs, const char *filename, const char *source_path) {
     if (idx == -1) {
         fclose(src);
         fprintf(stderr, "Erreur : pas d'inode disponible\n");
+        free(normalized);
         return -1;
     }
 
@@ -131,6 +283,8 @@ int fs_add_file(FileSystem *fs, const char *filename, const char *source_path) {
 
     strncpy(fs->inodes[idx].filename, filename, MAX_FILENAME - 1);
     fs->inodes[idx].filename[MAX_FILENAME - 1] = '\0';
+    strncpy(fs->inodes[idx].parent_path, parent_path, MAX_PATH - 1);
+    fs->inodes[idx].parent_path[MAX_PATH - 1] = '\0';
     fs->inodes[idx].is_directory = 0;
     fs->inodes[idx].size = size;
     fs->inodes[idx].offset = offset;
@@ -147,21 +301,24 @@ int fs_add_file(FileSystem *fs, const char *filename, const char *source_path) {
     fclose(src);
     fs->sb.num_files++;
 
-    printf("Fichier ajouté : %s (%lu octets)\n", filename, (unsigned long)size);
+    printf("Fichier ajouté : %s (%lu octets)\n", normalized, (unsigned long)size);
+    free(normalized);
     return 0;
 }
 
-int fs_extract_file(FileSystem *fs, const char *filename, const char *dest_path) {
-    int idx = -1;
-    for (int i = 0; i < MAX_FILES; i++) {
-        if (strcmp(fs->inodes[i].filename, filename) == 0) {
-            idx = i;
-            break;
-        }
+int fs_extract_file(FileSystem *fs, const char *fs_path, const char *dest_path) {
+    char *normalized = normalize_path(fs_path);
+
+    int idx = path_exists(fs, normalized, NULL);
+    if (idx == -1) {
+        fprintf(stderr, "Erreur : fichier '%s' introuvable\n", normalized);
+        free(normalized);
+        return -1;
     }
 
-    if (idx == -1) {
-        fprintf(stderr, "Erreur : fichier '%s' introuvable\n", filename);
+    if (fs->inodes[idx].is_directory) {
+        fprintf(stderr, "Erreur : '%s' est un répertoire, pas un fichier\n", normalized);
+        free(normalized);
         return -1;
     }
 
@@ -170,6 +327,7 @@ int fs_extract_file(FileSystem *fs, const char *filename, const char *dest_path)
     FILE *dest = fopen(dest_path, "wb");
     if (!dest) {
         perror("Impossible de créer le fichier de destination");
+        free(normalized);
         return -1;
     }
 
@@ -185,28 +343,56 @@ int fs_extract_file(FileSystem *fs, const char *filename, const char *dest_path)
     }
 
     fclose(dest);
-    printf("Fichier extrait : %s -> %s\n", filename, dest_path);
+    printf("Fichier extrait : %s -> %s\n", normalized, dest_path);
+    free(normalized);
     return 0;
 }
 
-void fs_list(FileSystem *fs) {
-    printf("\n=== Contenu du système de fichiers ===\n");
-    printf("Nombre de fichiers : %u/%u\n\n", fs->sb.num_files, fs->sb.max_files);
+void fs_list(FileSystem *fs, const char *path) {
+    fs_list_recursive(fs, path, 0);
+}
 
-    printf("%-30s %12s %20s\n", "Nom", "Taille", "Date");
-    printf("---------------------------------------------------------------\n");
+void fs_list_recursive(FileSystem *fs, const char *path, int depth) {
+    char *normalized = normalize_path(path);
 
+    // Verify path exists and is a directory
+    int idx = path_exists(fs, normalized, NULL);
+    if (idx != -1 && !fs->inodes[idx].is_directory) {
+        fprintf(stderr, "Erreur : '%s' n'est pas un répertoire\n", normalized);
+        free(normalized);
+        return;
+    }
+
+    if (depth == 0) {
+        printf("\n=== Contenu du système de fichiers ===\n");
+        printf("Répertoire : %s\n\n", normalized);
+        printf("%-40s %12s %20s\n", "Nom", "Taille", "Date");
+        printf("---------------------------------------------------------------------\n");
+    }
+
+    // List entries in this directory
     for (int i = 0; i < MAX_FILES; i++) {
-        if (fs->inodes[i].filename[0] != '\0') {
+        if (fs->inodes[i].filename[0] != '\0' &&
+            strcmp(fs->inodes[i].parent_path, normalized) == 0) {
+
             char time_str[20];
             struct tm *tm_info = localtime(&fs->inodes[i].modified);
             strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M", tm_info);
 
-            printf("%-30s %10lu B  %20s\n",
-                   fs->inodes[i].filename,
-                   (unsigned long)fs->inodes[i].size,
-                   time_str);
+            char indent[64] = "";
+            for (int j = 0; j < depth; j++) strcat(indent, "  ");
+
+            if (fs->inodes[i].is_directory) {
+                printf("%s%-38s %12s %20s\n", indent, fs->inodes[i].filename,
+                       "[DIR]", time_str);
+            } else {
+                printf("%s%-38s %10lu B  %20s\n", indent,
+                       fs->inodes[i].filename,
+                       (unsigned long)fs->inodes[i].size, time_str);
+            }
         }
     }
-    printf("\n");
+
+    if (depth == 0) printf("\n");
+    free(normalized);
 }

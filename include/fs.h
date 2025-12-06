@@ -9,6 +9,7 @@
 #define MAX_FILENAME 256
 #define MAX_FILES 1024
 #define BLOCK_SIZE 4096
+#define MAX_PATH 2048
 
 typedef struct {
     uint32_t magic;
@@ -20,6 +21,7 @@ typedef struct {
 
 typedef struct {
     char filename[MAX_FILENAME];
+    char parent_path[MAX_PATH];
     uint32_t is_directory;
     uint64_t size;
     uint64_t offset;
@@ -36,8 +38,11 @@ typedef struct {
 int fs_create(const char *path);
 FileSystem *fs_open(const char *path);
 void fs_close(FileSystem *fs);
-int fs_add_file(FileSystem *fs, const char *filename, const char *source_path);
-int fs_extract_file(FileSystem *fs, const char *filename, const char *dest_path);
-void fs_list(FileSystem *fs);
+
+int fs_mkdir(FileSystem *fs, const char *path);
+int fs_add_file(FileSystem *fs, const char *fs_path, const char *source_path);
+int fs_extract_file(FileSystem *fs, const char *fs_path, const char *dest_path);
+void fs_list(FileSystem *fs, const char *path);
+void fs_list_recursive(FileSystem *fs, const char *path, int depth);
 
 #endif // FS_H

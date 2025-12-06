@@ -1,2 +1,10 @@
 build/
 csfs
+.vscode/
+*.o
+*.img
+test.txt
+extracted.txt
+debug
+debug.c
+.DS_Store
