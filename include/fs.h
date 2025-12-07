@@ -42,6 +42,7 @@ void fs_close(FileSystem *fs);
 int fs_mkdir(FileSystem *fs, const char *path);
 int fs_add_file(FileSystem *fs, const char *fs_path, const char *source_path);
 int fs_extract_file(FileSystem *fs, const char *fs_path, const char *dest_path);
+int fs_copy_file(FileSystem *fs, const char *src_path, const char *dest_path);
 void fs_list(FileSystem *fs, const char *path);
 void fs_list_recursive(FileSystem *fs, const char *path, int depth);
 

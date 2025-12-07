@@ -129,7 +129,23 @@ static const ManPage man_pages[] = {
         .examples =
             "extract /data.csv ./out.csv    Extrait data.csv vers ./out.csv\n"
             "extract notes.txt /tmp/n.txt   Extrait vers /tmp (système hôte)",
-        .see_also = "add, cat"
+        .see_also = "add, cat, cp"
+    },
+    {
+        .name = "cp",
+        .synopsis = "cp <source> <destination>",
+        .description =
+            "Copie un fichier à l'intérieur du système de fichiers.\n"
+            "\n"
+            "Crée une copie du fichier source avec le chemin destination spécifié.\n"
+            "La destination ne doit pas exister. Le répertoire parent de la destination\n"
+            "doit exister. La taille et le contenu du fichier original sont préservés.",
+        .options = NULL,
+        .examples =
+            "cp notes.txt notes_backup.txt    Copie notes.txt en notes_backup.txt\n"
+            "cp file.txt /docs/file.txt       Copie file.txt dans /docs/\n"
+            "cp /src/data.csv /backup/data.csv    Copie entre répertoires",
+        .see_also = "extract, add, rm"
     },
     {
         .name = "rm",
@@ -143,7 +159,7 @@ static const ManPage man_pages[] = {
         .examples =
             "rm old.txt               Supprime old.txt\n"
             "rm /temp                 Supprime le répertoire /temp (doit être vide)",
-        .see_also = "mkdir, add"
+        .see_also = "mkdir, add, cp"
     },
     {
         .name = "help",

@@ -96,6 +96,7 @@ static int cmd_help(Shell *shell, Command *cmd) {
     printf("  mkdir <chemin>    - Créer un répertoire\n");
     printf("  add <fichier>     - Ajouter un fichier\n");
     printf("  cat <chemin>      - Afficher le contenu d'un fichier\n");
+    printf("  cp <src> <dest>   - Copier un fichier\n");
     printf("  extract <src> <dest> - Extraire un fichier\n");
     printf("  rm <chemin>       - Supprimer un fichier/répertoire\n");
     printf("  exit              - Quitter le shell\n");
@@ -319,6 +320,21 @@ static int cmd_extract(Shell *shell, Command *cmd) {
     char *resolved = resolve_path(shell, cmd->args[1]);
     int ret = fs_extract_file(shell->fs, resolved, cmd->args[2]);
     free(resolved);
+    return ret;
+}
+
+static int cmd_cp(Shell *shell, Command *cmd) {
+    if (cmd->argc < 3) {
+        fprintf(stderr, "cp: arguments requis (source et destination)\n");
+        return -1;
+    }
+
+    char *src = resolve_path(shell, cmd->args[1]);
+    char *dest = resolve_path(shell, cmd->args[2]);
+
+    int ret = fs_copy_file(shell->fs, src, dest);
+    free(src);
+    free(dest);
     return ret;
 }
 
@@ -556,6 +572,8 @@ int shell_execute_command(Shell *shell, const char *cmd_line) {
         ret = cmd_cat(shell, &cmd);
     } else if (strcmp(command, "extract") == 0) {
         ret = cmd_extract(shell, &cmd);
+    } else if (strcmp(command, "cp") == 0) {
+        ret = cmd_cp(shell, &cmd);
     } else if (strcmp(command, "rm") == 0) {
         ret = cmd_rm(shell, &cmd);
     } else {
