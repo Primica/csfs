@@ -97,7 +97,8 @@ static int cmd_help(Shell *shell, Command *cmd) {
     printf("  add <fichier>     - Ajouter un fichier\n");
     printf("  cat <chemin>      - Afficher le contenu d'un fichier\n");
     printf("  cp <src> <dest>   - Copier un fichier\n");
-    printf("  extract <src> <dest> - Extraire un fichier\n");
+    printf("  mv <src> <dest>   - Déplacer/renommer un fichier ou répertoire\n");
+    printf("  extract <src> [dest] - Extraire un fichier\n");
     printf("  rm <chemin>       - Supprimer un fichier/répertoire\n");
     printf("  exit              - Quitter le shell\n");
     printf("\nPour plus de détails: man <commande>\n");
@@ -312,13 +313,30 @@ static int cmd_cat(Shell *shell, Command *cmd) {
 }
 
 static int cmd_extract(Shell *shell, Command *cmd) {
-    if (cmd->argc < 3) {
-        fprintf(stderr, "extract: arguments requis (chemin_fs et destination)\n");
+    if (cmd->argc < 2) {
+        fprintf(stderr, "extract: usage -> extract <chemin_fs> [destination]\n");
         return -1;
     }
 
     char *resolved = resolve_path(shell, cmd->args[1]);
-    int ret = fs_extract_file(shell->fs, resolved, cmd->args[2]);
+    
+    // Si pas de destination fournie, utiliser le basename du fichier source
+    char final_dest[MAX_PATH];
+    const char *dest_path = cmd->args[2];
+    
+    if (cmd->argc == 2) {
+        // Pas de destination : utiliser le basename dans le répertoire courant
+        basename_from_path(cmd->args[1], final_dest, sizeof(final_dest));
+        dest_path = final_dest;
+    } else if (dest_path[strlen(dest_path) - 1] == '/') {
+        // Destination se termine par / : c'est un répertoire, ajouter le basename
+        char base[MAX_FILENAME];
+        basename_from_path(cmd->args[1], base, sizeof(base));
+        snprintf(final_dest, sizeof(final_dest), "%s%s", dest_path, base);
+        dest_path = final_dest;
+    }
+
+    int ret = fs_extract_file(shell->fs, resolved, dest_path);
     free(resolved);
     return ret;
 }
@@ -333,6 +351,21 @@ static int cmd_cp(Shell *shell, Command *cmd) {
     char *dest = resolve_path(shell, cmd->args[2]);
 
     int ret = fs_copy_file(shell->fs, src, dest);
+    free(src);
+    free(dest);
+    return ret;
+}
+
+static int cmd_mv(Shell *shell, Command *cmd) {
+    if (cmd->argc < 3) {
+        fprintf(stderr, "mv: arguments requis (source et destination)\n");
+        return -1;
+    }
+
+    char *src = resolve_path(shell, cmd->args[1]);
+    char *dest = resolve_path(shell, cmd->args[2]);
+
+    int ret = fs_move_file(shell->fs, src, dest);
     free(src);
     free(dest);
     return ret;
@@ -574,6 +607,8 @@ int shell_execute_command(Shell *shell, const char *cmd_line) {
         ret = cmd_extract(shell, &cmd);
     } else if (strcmp(command, "cp") == 0) {
         ret = cmd_cp(shell, &cmd);
+    } else if (strcmp(command, "mv") == 0) {
+        ret = cmd_mv(shell, &cmd);
     } else if (strcmp(command, "rm") == 0) {
         ret = cmd_rm(shell, &cmd);
     } else {

@@ -194,6 +194,23 @@ static const ManPage man_pages[] = {
         .see_also = "help"
     },
     {
+        .name = "mv",
+        .synopsis = "mv <source> <destination>",
+        .description =
+            "Déplace ou renomme un fichier à l'intérieur du système de fichiers.\n"
+            "\n"
+            "Déplace le fichier source vers la destination spécifiée.\n"
+            "La destination ne doit pas exister. Le répertoire parent de la destination\n"
+            "doit exister. Le contenu et la taille du fichier sont préservés.\n"
+            "Peut être utilisé pour renommer un fichier ou le déplacer vers un autre répertoire.",
+        .options = NULL,
+        .examples =
+            "mv old.txt new.txt       Renomme old.txt en new.txt\n"
+            "mv file.txt /docs/       Déplace file.txt vers /docs/\n"
+            "mv /src/data.csv /backup/data.csv    Déplace vers un nouveau répertoire",
+        .see_also = "cp, rm, cd"
+    },
+    {
         .name = "exit",
         .synopsis = "exit",
         .description =

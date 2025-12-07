@@ -460,6 +460,108 @@ int fs_copy_file(FileSystem *fs, const char *src_path, const char *dest_path) {
     return 0;
 }
 
+int fs_move_file(FileSystem *fs, const char *src_path, const char *dest_path) {
+    if (fs->sb.num_files >= fs->sb.max_files) {
+        fprintf(stderr, "Erreur : système de fichiers plein\n");
+        return -1;
+    }
+
+    char *normalized_src = normalize_path(src_path);
+    char *normalized_dest = normalize_path(dest_path);
+
+    // Find source file
+    int src_idx = -1;
+    for (int i = 0; i < MAX_FILES; i++) {
+        if (fs->inodes[i].filename[0] != '\0') {
+            char full_path[MAX_PATH];
+            if (strcmp(fs->inodes[i].parent_path, "/") == 0) {
+                snprintf(full_path, MAX_PATH, "/%s", fs->inodes[i].filename);
+            } else {
+                snprintf(full_path, MAX_PATH, "%s/%s", fs->inodes[i].parent_path,
+                         fs->inodes[i].filename);
+            }
+            if (strcmp(full_path, normalized_src) == 0) {
+                src_idx = i;
+                break;
+            }
+        }
+    }
+
+    if (src_idx == -1) {
+        fprintf(stderr, "Erreur : '%s' introuvable\n", normalized_src);
+        free(normalized_src);
+        free(normalized_dest);
+        return -1;
+    }
+
+    // Check if destination already exists
+    if (path_exists(fs, normalized_dest, NULL) >= 0) {
+        fprintf(stderr, "Erreur : '%s' existe déjà\n", normalized_dest);
+        free(normalized_src);
+        free(normalized_dest);
+        return -1;
+    }
+
+    // Extract parent and filename from destination
+    char parent_path[MAX_PATH];
+    char filename[MAX_FILENAME];
+    extract_parent_path(normalized_dest, parent_path, MAX_PATH);
+    extract_filename(normalized_dest, filename, MAX_FILENAME);
+
+    // Check if parent directory exists
+    if (!parent_exists(fs, parent_path)) {
+        fprintf(stderr, "Erreur : le répertoire parent '%s' n'existe pas\n", parent_path);
+        free(normalized_src);
+        free(normalized_dest);
+        return -1;
+    }
+
+    // For files: update inode in place
+    if (!fs->inodes[src_idx].is_directory) {
+        strncpy(fs->inodes[src_idx].filename, filename, MAX_FILENAME - 1);
+        fs->inodes[src_idx].filename[MAX_FILENAME - 1] = '\0';
+        strncpy(fs->inodes[src_idx].parent_path, parent_path, MAX_PATH - 1);
+        fs->inodes[src_idx].parent_path[MAX_PATH - 1] = '\0';
+        fs->inodes[src_idx].modified = time(NULL);
+
+        printf("Déplacé : %s -> %s\n", normalized_src, normalized_dest);
+    } else {
+        // For directories: update and cascade rename children
+        strncpy(fs->inodes[src_idx].filename, filename, MAX_FILENAME - 1);
+        fs->inodes[src_idx].filename[MAX_FILENAME - 1] = '\0';
+        strncpy(fs->inodes[src_idx].parent_path, parent_path, MAX_PATH - 1);
+        fs->inodes[src_idx].parent_path[MAX_PATH - 1] = '\0';
+        fs->inodes[src_idx].modified = time(NULL);
+
+        // Cascade update all children
+        for (int i = 0; i < MAX_FILES; i++) {
+            if (fs->inodes[i].filename[0] != '\0' && i != src_idx) {
+                // Check if this entry is under the old directory path
+                if (strncmp(fs->inodes[i].parent_path, normalized_src,
+                           strlen(normalized_src)) == 0) {
+                    // Rebuild parent path with new directory location
+                    char old_parent[MAX_PATH];
+                    strncpy(old_parent, fs->inodes[i].parent_path, MAX_PATH - 1);
+
+                    char new_parent[MAX_PATH];
+                    size_t offset = strlen(normalized_src);
+                    snprintf(new_parent, MAX_PATH, "%s%s", normalized_dest,
+                            old_parent + offset);
+
+                    strncpy(fs->inodes[i].parent_path, new_parent, MAX_PATH - 1);
+                    fs->inodes[i].parent_path[MAX_PATH - 1] = '\0';
+                }
+            }
+        }
+
+        printf("Répertoire déplacé : %s -> %s\n", normalized_src, normalized_dest);
+    }
+
+    free(normalized_src);
+    free(normalized_dest);
+    return 0;
+}
+
 void fs_list(FileSystem *fs, const char *path) {
     fs_list_recursive(fs, path, 0);
 }

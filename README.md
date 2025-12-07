@@ -71,7 +71,14 @@ L'exécutable `csfs` sera créé à la racine du projet.
 
 #### Extraire un fichier
 ```bash
-./csfs myfs.img extract /documents/rapport.pdf ./rapport_extrait.pdf
+# Extraction simple (vers le répertoire courant)
+./csfs myfs.img extract /documents/rapport.pdf
+
+# Extraction vers un répertoire spécifique (basename automatique)
+./csfs myfs.img extract /documents/rapport.pdf /tmp/
+
+# Extraction avec renommage personnalisé
+./csfs myfs.img extract /documents/rapport.pdf ./mon_rapport.pdf
 ```
 
 ### Mode shell interactif
@@ -95,7 +102,9 @@ Lancez le shell :
 | `mkdir <chemin>` | Crée un répertoire | `mkdir projets` |
 | `add <fichier> [dest]` | Ajoute un fichier | `add test.txt`, `add file.pdf /docs/` |
 | `cat <chemin>` | Affiche un fichier | `cat /docs/readme.txt` |
-| `extract <src> <dest>` | Extrait un fichier | `extract /file.txt ./out.txt` |
+| `extract <src> [dest]` | Extrait un fichier | `extract /file.txt` ou `extract /file.txt /tmp/` |
+| `cp <src> <dest>` | Copie dans le FS | `cp /file.txt /backup/file.txt` |
+| `mv <src> <dest>` | Déplace/renomme | `mv /old.txt /new.txt`, `mv /file.txt /docs/` |
 | `rm <chemin>` | Supprime (répertoire vide ou fichier) | `rm old.txt` |
 | `exit` | Quitte le shell | `exit` |
 
@@ -182,11 +191,11 @@ csfs/
 
 #### Court terme
 - [x] **Commande tree** : affichage arborescent avec options `-a`, `-d`, `-L`
-- [ ] **Commandes shell additionnelles**
-  - `cp` : copie de fichiers/répertoires dans le FS
-  - `mv` : déplacement/renommage
-  - `find` : recherche par nom/motif
-  - `stat` : métadonnées détaillées d'une entrée
+- [x] **Commandes shell additionnelles** (partiellement)
+  - [x] `cp` : copie de fichiers dans le FS
+  - [x] `mv` : déplacement/renommage de fichiers
+  - [ ] `find` : recherche par nom/motif
+  - [ ] `stat` : métadonnées détaillées d'une entrée
 
 - [ ] **Amélioration de l'ajout de fichiers**
   - Support de wildcards (`add *.txt /docs/`)
