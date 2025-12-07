@@ -98,10 +98,12 @@ Lancez le shell :
 | `pwd` | Répertoire courant | `pwd` |
 | `ls [chemin]` | Liste le contenu | `ls`, `ls /docs` |
 | `tree [options] [chemin]` | Affichage arborescent | `tree`, `tree -a`, `tree -d -L 2` |
+| `find [chemin] [motif]` | Recherche par nom | `find log`, `find /docs report` |
 | `cd <chemin>` | Change de répertoire | `cd /docs`, `cd ..`, `cd /` |
 | `mkdir <chemin>` | Crée un répertoire | `mkdir projets` |
 | `add <fichier> [dest]` | Ajoute un fichier | `add test.txt`, `add file.pdf /docs/` |
 | `cat <chemin>` | Affiche un fichier | `cat /docs/readme.txt` |
+| `stat <chemin>` | Métadonnées détaillées | `stat /docs/readme.txt` |
 | `extract <src> [dest]` | Extrait un fichier | `extract /file.txt` ou `extract /file.txt /tmp/` |
 | `cp <src> <dest>` | Copie dans le FS | `cp /file.txt /backup/file.txt` |
 | `mv <src> <dest>` | Déplace/renomme | `mv /old.txt /new.txt`, `mv /file.txt /docs/` |
@@ -194,8 +196,8 @@ csfs/
 - [x] **Commandes shell additionnelles** (partiellement)
   - [x] `cp` : copie de fichiers dans le FS
   - [x] `mv` : déplacement/renommage de fichiers
-  - [ ] `find` : recherche par nom/motif
-  - [ ] `stat` : métadonnées détaillées d'une entrée
+  - [x] `find` : recherche par nom/motif
+  - [x] `stat` : métadonnées détaillées d'une entrée
 
 - [ ] **Amélioration de l'ajout de fichiers**
   - Support de wildcards (`add *.txt /docs/`)

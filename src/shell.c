@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <time.h>
 
 #define BUFFER_SIZE 2048
 #define MAX_ARGS 32
@@ -82,6 +83,37 @@ static char *resolve_path(const Shell *shell, const char *arg_path) {
     return result;
 }
 
+// Construit le chemin absolu complet pour une entrée inode
+static void build_full_path_from_inode(const Inode *inode, char *out, size_t size) {
+    if (strcmp(inode->parent_path, "/") == 0) {
+        snprintf(out, size, "/%s", inode->filename);
+    } else {
+        snprintf(out, size, "%s/%s", inode->parent_path, inode->filename);
+    }
+    out[size - 1] = '\0';
+}
+
+// Recherche l'index d'inode pour un chemin absolu ; retourne -1 si introuvable
+static int inode_index_for_path(Shell *shell, const char *path, int *is_dir_out) {
+    if (strcmp(path, "/") == 0) {
+        if (is_dir_out) *is_dir_out = 1;
+        return -1; // racine virtuelle
+    }
+
+    for (int i = 0; i < MAX_FILES; i++) {
+        if (shell->fs->inodes[i].filename[0] != '\0') {
+            char full_path[MAX_PATH];
+            build_full_path_from_inode(&shell->fs->inodes[i], full_path, sizeof(full_path));
+            if (strcmp(full_path, path) == 0) {
+                if (is_dir_out) *is_dir_out = shell->fs->inodes[i].is_directory;
+                return i;
+            }
+        }
+    }
+
+    return -1;
+}
+
 static int cmd_help(Shell *shell, Command *cmd) {
     (void)shell;
     (void)cmd;
@@ -92,10 +124,12 @@ static int cmd_help(Shell *shell, Command *cmd) {
     printf("  pwd               - Afficher le répertoire courant\n");
     printf("  ls [chemin]       - Lister un répertoire\n");
     printf("  tree [options]    - Affichage arborescent\n");
+    printf("  find [chemin] [motif] - Rechercher par nom\n");
     printf("  cd <chemin>       - Changer de répertoire\n");
     printf("  mkdir <chemin>    - Créer un répertoire\n");
     printf("  add <fichier>     - Ajouter un fichier\n");
     printf("  cat <chemin>      - Afficher le contenu d'un fichier\n");
+    printf("  stat <chemin>     - Métadonnées détaillées\n");
     printf("  cp <src> <dest>   - Copier un fichier\n");
     printf("  mv <src> <dest>   - Déplacer/renommer un fichier ou répertoire\n");
     printf("  extract <src> [dest] - Extraire un fichier\n");
@@ -582,6 +616,132 @@ static int cmd_tree(Shell *shell, Command *cmd) {
     return 0;
 }
 
+static int name_matches(const char *name, const char *pattern) {
+    if (!pattern) return 1;
+    return strstr(name, pattern) != NULL;
+}
+
+static void find_recursive(Shell *shell, const char *path, const char *pattern) {
+    for (int i = 0; i < MAX_FILES; i++) {
+        if (shell->fs->inodes[i].filename[0] != '\0' &&
+            strcmp(shell->fs->inodes[i].parent_path, path) == 0) {
+            char child_path[MAX_PATH];
+            build_full_path_from_inode(&shell->fs->inodes[i], child_path, sizeof(child_path));
+
+            if (name_matches(shell->fs->inodes[i].filename, pattern)) {
+                printf("%s%s\n", child_path, shell->fs->inodes[i].is_directory ? "/" : "");
+            }
+
+            if (shell->fs->inodes[i].is_directory) {
+                find_recursive(shell, child_path, pattern);
+            }
+        }
+    }
+}
+
+static int cmd_find(Shell *shell, Command *cmd) {
+    const char *start_arg = ".";
+    const char *pattern = NULL;
+
+    if (cmd->argc == 2) {
+        if (cmd->args[1][0] == '/' || cmd->args[1][0] == '.') {
+            start_arg = cmd->args[1];
+        } else {
+            pattern = cmd->args[1];
+        }
+    } else if (cmd->argc >= 3) {
+        start_arg = cmd->args[1];
+        pattern = cmd->args[2];
+    }
+
+    char *start_path = resolve_path(shell, start_arg);
+    size_t start_len = strlen(start_path);
+    if (start_len > 1 && start_path[start_len - 1] == '/') {
+        start_path[start_len - 1] = '\0';
+    }
+    int is_dir = 0;
+    int idx = inode_index_for_path(shell, start_path, &is_dir);
+
+    if (idx == -1 && strcmp(start_path, "/") != 0) {
+        fprintf(stderr, "find: '%s' introuvable\n", start_path);
+        free(start_path);
+        return -1;
+    }
+
+    // Si le point de départ est un fichier, on évalue uniquement ce fichier
+    if (idx >= 0 && !is_dir) {
+        if (name_matches(shell->fs->inodes[idx].filename, pattern)) {
+            printf("%s\n", start_path);
+        }
+        free(start_path);
+        return 0;
+    }
+
+    // Inclure le répertoire de départ si le pattern matche (sauf racine)
+    if (pattern && strcmp(start_path, "/") != 0 && name_matches(strrchr(start_path, '/') ? strrchr(start_path, '/') + 1 : start_path, pattern)) {
+        printf("%s/\n", start_path);
+    }
+
+    find_recursive(shell, start_path, pattern);
+
+    free(start_path);
+    return 0;
+}
+
+static void print_stat_info(const char *path, const Inode *inode, int is_dir) {
+    printf("Chemin : %s\n", path);
+    printf("Type   : %s\n", is_dir ? "Répertoire" : "Fichier");
+
+    if (inode) {
+        printf("Taille : %lu octets\n", (unsigned long)inode->size);
+
+        char created[32];
+        char modified[32];
+        struct tm tm_c, tm_m;
+        strftime(created, sizeof(created), "%Y-%m-%d %H:%M", localtime_r(&inode->created, &tm_c));
+        strftime(modified, sizeof(modified), "%Y-%m-%d %H:%M", localtime_r(&inode->modified, &tm_m));
+        printf("Créé   : %s\n", created);
+        printf("Modifié: %s\n", modified);
+        printf("Parent : %s\n", inode->parent_path);
+    } else {
+        printf("Taille : 0 octets\n");
+        printf("Créé   : N/A\n");
+        printf("Modifié: N/A\n");
+        printf("Parent : (aucun)\n");
+    }
+}
+
+static int cmd_stat(Shell *shell, Command *cmd) {
+    if (cmd->argc < 2) {
+        fprintf(stderr, "stat: usage -> stat <chemin>\n");
+        return -1;
+    }
+
+    char *resolved = resolve_path(shell, cmd->args[1]);
+    size_t len = strlen(resolved);
+    if (len > 1 && resolved[len - 1] == '/') {
+        resolved[len - 1] = '\0';
+    }
+    int is_dir = 0;
+    int idx = inode_index_for_path(shell, resolved, &is_dir);
+
+    if (idx == -1 && strcmp(resolved, "/") != 0) {
+        fprintf(stderr, "stat: '%s' introuvable\n", resolved);
+        free(resolved);
+        return -1;
+    }
+
+    if (idx == -1) {
+        // Racine virtuelle
+        print_stat_info(resolved, NULL, 1);
+    } else {
+        print_stat_info(resolved, &shell->fs->inodes[idx], is_dir);
+    }
+
+    free(resolved);
+    return 0;
+}
+
 int shell_execute_command(Shell *shell, const char *cmd_line) {
     if (!cmd_line || cmd_line[0] == '\0') return 0;
 
@@ -605,6 +765,8 @@ int shell_execute_command(Shell *shell, const char *cmd_line) {
         ret = cmd_ls(shell, &cmd);
     } else if (strcmp(command, "tree") == 0) {
         ret = cmd_tree(shell, &cmd);
+    } else if (strcmp(command, "find") == 0) {
+        ret = cmd_find(shell, &cmd);
     } else if (strcmp(command, "cd") == 0) {
         ret = cmd_cd(shell, &cmd);
     } else if (strcmp(command, "mkdir") == 0) {
@@ -613,6 +775,8 @@ int shell_execute_command(Shell *shell, const char *cmd_line) {
         ret = cmd_add(shell, &cmd);
     } else if (strcmp(command, "cat") == 0) {
         ret = cmd_cat(shell, &cmd);
+    } else if (strcmp(command, "stat") == 0) {
+        ret = cmd_stat(shell, &cmd);
     } else if (strcmp(command, "extract") == 0) {
         ret = cmd_extract(shell, &cmd);
     } else if (strcmp(command, "cp") == 0) {

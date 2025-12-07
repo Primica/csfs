@@ -59,6 +59,23 @@ static const ManPage man_pages[] = {
         .see_also = "ls, cd, find"
     },
     {
+        .name = "find",
+        .synopsis = "find [chemin] [motif]",
+        .description =
+            "Recherche récursivement des fichiers ou répertoires à partir d'un chemin donné.\n"
+            "\n"
+            "Si aucun chemin n'est fourni, la recherche démarre depuis le répertoire courant.\n"
+            "Le motif est une sous-chaîne du nom de fichier (recherche simple, sensible à la casse).\n"
+            "Lorsque le motif est omis, tous les éléments rencontrés sont listés.",
+        .options = NULL,
+        .examples =
+            "find                     Liste tout depuis le répertoire courant\n"
+            "find /docs               Liste tout sous /docs\n"
+            "find notes               Recherche tous les noms contenant 'notes' depuis le cwd\n"
+            "find /projects log       Recherche 'log' sous /projects",
+        .see_also = "ls, tree, stat"
+    },
+    {
         .name = "pwd",
         .synopsis = "pwd",
         .description =
@@ -130,6 +147,22 @@ static const ManPage man_pages[] = {
             "extract /data.csv ./out.csv    Extrait data.csv vers ./out.csv\n"
             "extract notes.txt /tmp/n.txt   Extrait vers /tmp (système hôte)",
         .see_also = "add, cat, cp"
+    },
+    {
+        .name = "stat",
+        .synopsis = "stat <chemin>",
+        .description =
+            "Affiche les métadonnées détaillées d'un fichier ou répertoire.\n"
+            "\n"
+            "Montre le type (fichier/répertoire), la taille, les dates de création et\n"
+            "de modification ainsi que le chemin parent. Fonctionne aussi sur la racine\n"
+            "du système de fichiers.",
+        .options = NULL,
+        .examples =
+            "stat /docs/report.txt    Affiche les métadonnées de report.txt\n"
+            "stat /                   Métadonnées de la racine\n"
+            "stat ./note.md           Chemin relatif supporté",
+        .see_also = "ls, find, tree"
     },
     {
         .name = "cp",
