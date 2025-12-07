@@ -100,6 +100,7 @@ static int cmd_help(Shell *shell, Command *cmd) {
     printf("  mv <src> <dest>   - Déplacer/renommer un fichier ou répertoire\n");
     printf("  extract <src> [dest] - Extraire un fichier\n");
     printf("  rm <chemin>       - Supprimer un fichier/répertoire\n");
+    printf("  clear             - Effacer l'écran\n");
     printf("  exit              - Quitter le shell\n");
     printf("\nPour plus de détails: man <commande>\n");
     printf("Liste complète: man --list\n\n");
@@ -121,6 +122,15 @@ static int cmd_man(Shell *shell, Command *cmd) {
     }
 
     man_display(cmd->args[1]);
+    return 0;
+}
+
+static int cmd_clear(Shell *shell, Command *cmd) {
+    (void)shell;
+    (void)cmd;
+    // ANSI escape sequence pour effacer l'écran et repositionner le curseur
+    printf("\033[2J\033[H");
+    fflush(stdout);
     return 0;
 }
 
@@ -611,6 +621,8 @@ int shell_execute_command(Shell *shell, const char *cmd_line) {
         ret = cmd_mv(shell, &cmd);
     } else if (strcmp(command, "rm") == 0) {
         ret = cmd_rm(shell, &cmd);
+    } else if (strcmp(command, "clear") == 0) {
+        ret = cmd_clear(shell, &cmd);
     } else {
         fprintf(stderr, "Commande inconnue: %s\n", command);
         ret = -1;

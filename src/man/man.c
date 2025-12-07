@@ -211,6 +211,20 @@ static const ManPage man_pages[] = {
         .see_also = "cp, rm, cd"
     },
     {
+        .name = "clear",
+        .synopsis = "clear",
+        .description =
+            "Efface l'écran du terminal.\n"
+            "\n"
+            "Nettoie l'affichage du terminal et repositionne le curseur en haut\n"
+            "de l'écran. Utile pour améliorer la lisibilité lors de sessions\n"
+            "interactives prolongées.",
+        .options = NULL,
+        .examples =
+            "clear                    Efface l'écran du terminal",
+        .see_also = "help"
+    },
+    {
         .name = "exit",
         .synopsis = "exit",
         .description =
