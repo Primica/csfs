@@ -13,7 +13,7 @@ CSFS est un système de fichiers conteneurisé qui stocke des fichiers et réper
 - **Shell interactif** : REPL avec commandes familières (cd, ls, mkdir, cat, etc.)
 - **CLI ergonomique** : Commandes simples pour opérations rapides
 - **Ajout intelligent** : Détection automatique du basename et support des chemins avec `/`
-- **Wildcards** : Support des motifs `*`/`?` pour add/extract (style shell)
+- **Wildcards** : Support des motifs `*`/`?` pour add/extract/ls/cp/mv/rm/stat (style shell)
 - **Métadonnées** : Timestamps de création/modification pour chaque entrée
 - **Format binaire** : Superblock + table d'inodes + zone de données
 
@@ -97,7 +97,7 @@ Lancez le shell :
 |----------|-------------|----------|
 | `help` | Affiche l'aide | `help` |
 | `pwd` | Répertoire courant | `pwd` |
-| `ls [chemin]` | Liste le contenu | `ls`, `ls /docs` |
+| `ls [chemin]` | Liste le contenu (wildcards supportés) | `ls`, `ls /docs`, `ls *.txt` |
 | `tree [options] [chemin]` | Affichage arborescent | `tree`, `tree -a`, `tree -d -L 2` |
 | `find [chemin] [motif]` | Recherche par nom | `find log`, `find /docs report` |
 | `cd <chemin>` | Change de répertoire | `cd /docs`, `cd ..`, `cd /` |
@@ -106,9 +106,9 @@ Lancez le shell :
 | `cat <chemin>` | Affiche un fichier | `cat /docs/readme.txt` |
 | `stat <chemin>` | Métadonnées détaillées | `stat /docs/readme.txt` |
 | `extract <src> [dest]` | Extrait fichier(s) (wildcards supportés) | `extract /docs/*.txt /tmp/` |
-| `cp <src> <dest>` | Copie dans le FS | `cp /file.txt /backup/file.txt` |
-| `mv <src> <dest>` | Déplace/renomme | `mv /old.txt /new.txt`, `mv /file.txt /docs/` |
-| `rm <chemin>` | Supprime (répertoire vide ou fichier) | `rm old.txt` |
+| `cp <src> <dest>` | Copie dans le FS (wildcards) | `cp /file*.txt /backup/` |
+| `mv <src> <dest>` | Déplace/renomme (wildcards) | `mv /old*.txt /new/` |
+| `rm [-r] [-f] <chemin>` | Supprime fichiers/répertoires (wildcards, récursif/force) | `rm -rf /logs/` |
 | `exit` | Quitte le shell | `exit` |
 
 **Options de `tree`** :

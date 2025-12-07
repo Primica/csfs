@@ -29,7 +29,8 @@ static const ManPage man_pages[] = {
             "\n"
             "Sans argument, liste le répertoire courant. Avec un chemin,\n"
             "liste le contenu du répertoire spécifié. Affiche le nom,\n"
-            "la taille et la date de modification de chaque entrée.",
+            "la taille et la date de modification de chaque entrée.\n"
+            "Supporte les wildcards '*' et '?' (ex: ls *.txt).",
         .options = NULL,
         .examples =
             "ls                       Liste le répertoire courant\n"
@@ -128,7 +129,8 @@ static const ManPage man_pages[] = {
             "Affiche le contenu d'un fichier sur la sortie standard.\n"
             "\n"
             "Lit et affiche l'intégralité du contenu du fichier spécifié.\n"
-            "Utile pour visualiser des fichiers texte.",
+            "Utile pour visualiser des fichiers texte. Supporte les wildcards\n"
+            "'*' et '?' sur le chemin (ex: cat /docs/*.txt).",
         .options = NULL,
         .examples =
             "cat README.md            Affiche le contenu de README.md\n"
@@ -159,7 +161,7 @@ static const ManPage man_pages[] = {
             "\n"
             "Montre le type (fichier/répertoire), la taille, les dates de création et\n"
             "de modification ainsi que le chemin parent. Fonctionne aussi sur la racine\n"
-            "du système de fichiers.",
+            "du système de fichiers. Supporte les wildcards '*' et '?' (ex: stat *.txt).",
         .options = NULL,
         .examples =
             "stat /docs/report.txt    Affiche les métadonnées de report.txt\n"
@@ -175,7 +177,8 @@ static const ManPage man_pages[] = {
             "\n"
             "Crée une copie du fichier source avec le chemin destination spécifié.\n"
             "La destination ne doit pas exister. Le répertoire parent de la destination\n"
-            "doit exister. La taille et le contenu du fichier original sont préservés.",
+            "doit exister. La taille et le contenu du fichier original sont préservés.\n"
+            "Supporte les wildcards '*' et '?' sur la source (ex: cp /src/*.txt /bak/).",
         .options = NULL,
         .examples =
             "cp notes.txt notes_backup.txt    Copie notes.txt en notes_backup.txt\n"
@@ -185,16 +188,21 @@ static const ManPage man_pages[] = {
     },
     {
         .name = "rm",
-        .synopsis = "rm <chemin>",
+        .synopsis = "rm [-r] [-f] <chemin>",
         .description =
-            "Supprime un fichier ou un répertoire vide.\n"
+            "Supprime des fichiers ou répertoires.\n"
             "\n"
-            "Les répertoires non-vides ne peuvent pas être supprimés.\n"
-            "La suppression est définitive (pas de corbeille).",
-        .options = NULL,
+            "Supporte les wildcards '*' et '?' sur le chemin. Les répertoires peuvent\n"
+            "être supprimés récursivement avec -r. L'option -f ignore les erreurs\n"
+            "(entrée manquante, répertoires non vides sans -r). La suppression est\n"
+            "définitive (pas de corbeille).",
+        .options =
+            "-r, -R    Suppression récursive des répertoires\n"
+            "-f        Forcer (ignorer les erreurs et les fichiers manquants)",
         .examples =
             "rm old.txt               Supprime old.txt\n"
-            "rm /temp                 Supprime le répertoire /temp (doit être vide)",
+            "rm -r /temp/logs         Supprime récursivement /temp/logs\n"
+            "rm -rf /temp/logs        Force la suppression même si des entrées manquent",
         .see_also = "mkdir, add, cp"
     },
     {
@@ -238,7 +246,8 @@ static const ManPage man_pages[] = {
             "Déplace le fichier source vers la destination spécifiée.\n"
             "La destination ne doit pas exister. Le répertoire parent de la destination\n"
             "doit exister. Le contenu et la taille du fichier sont préservés.\n"
-            "Peut être utilisé pour renommer un fichier ou le déplacer vers un autre répertoire.",
+            "Peut être utilisé pour renommer un fichier ou le déplacer vers un autre répertoire.\n"
+            "Supporte les wildcards '*' et '?' sur la source (ex: mv /tmp/*.log /logs/).",
         .options = NULL,
         .examples =
             "mv old.txt new.txt       Renomme old.txt en new.txt\n"

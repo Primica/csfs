@@ -149,6 +149,57 @@ static int fs_path_is_dir(Shell *shell, const char *abs_path) {
     return (idx >= 0) ? is_dir : 0;
 }
 
+static int has_glob(const char *s) {
+    return strpbrk(s, "*?") != NULL;
+}
+
+// Suppression d'un chemin (fichier ou répertoire) avec options récursif/force
+static int delete_path(Shell *sh, const char *abs_path, int recursive, int force) {
+    if (strcmp(abs_path, "/") == 0) {
+        fprintf(stderr, "rm: refus de supprimer la racine\n");
+        return -1;
+    }
+
+    int is_dir = 0;
+    int idx = inode_index_for_path(sh, abs_path, &is_dir);
+    if (idx == -1) {
+        if (!force) fprintf(stderr, "rm: '%s' introuvable\n", abs_path);
+        return force ? 0 : -1;
+    }
+
+    if (is_dir) {
+        int has_child = 0;
+        for (int i = 0; i < MAX_FILES; i++) {
+            if (sh->fs->inodes[i].filename[0] != '\0' &&
+                strcmp(sh->fs->inodes[i].parent_path, abs_path) == 0) {
+                has_child = 1;
+                if (!recursive) {
+                    fprintf(stderr, "rm: '%s' n'est pas vide (utiliser -r)\n", abs_path);
+                    return -1;
+                }
+            }
+        }
+
+        if (has_child && recursive) {
+            for (int i = 0; i < MAX_FILES; i++) {
+                if (sh->fs->inodes[i].filename[0] != '\0' &&
+                    strcmp(sh->fs->inodes[i].parent_path, abs_path) == 0) {
+                    char child_path[MAX_PATH];
+                    build_full_path_from_inode(&sh->fs->inodes[i], child_path, sizeof(child_path));
+                    if (delete_path(sh, child_path, recursive, force) != 0 && !force) {
+                        return -1;
+                    }
+                }
+            }
+        }
+    }
+
+    sh->fs->inodes[idx].filename[0] = '\0';
+    sh->fs->sb.num_files--;
+    if (!force) printf("Supprimé: %s\n", abs_path);
+    return 0;
+}
+
 // Expansion des wildcards sur chemins FS (absolus ou relatifs au cwd)
 static int expand_fs_glob(Shell *shell, const char *input, char results[][MAX_PATH], int max_results) {
     char pattern[MAX_PATH];
@@ -252,9 +303,23 @@ static int cmd_pwd(Shell *shell, Command *cmd) {
 
 static int cmd_ls(Shell *shell, Command *cmd) {
     const char *path = (cmd->argc > 1) ? cmd->args[1] : ".";
-    char *resolved = resolve_path(shell, path);
-    fs_list(shell->fs, resolved);
-    free(resolved);
+    if (!has_glob(path)) {
+        char *resolved = resolve_path(shell, path);
+        fs_list(shell->fs, resolved);
+        free(resolved);
+        return 0;
+    }
+
+    char matches[MAX_FILES][MAX_PATH];
+    int mcount = expand_fs_glob(shell, path, matches, MAX_FILES);
+    if (mcount == 0) {
+        fprintf(stderr, "ls: aucune correspondance pour '%s'\n", path);
+        return -1;
+    }
+
+    for (int i = 0; i < mcount; i++) {
+        fs_list(shell->fs, matches[i]);
+    }
     return 0;
 }
 
@@ -412,56 +477,47 @@ static int cmd_cat(Shell *shell, Command *cmd) {
         return -1;
     }
 
-    char *resolved = resolve_path(shell, cmd->args[1]);
+    char matches[MAX_FILES][MAX_PATH];
+    int mcount = expand_fs_glob(shell, cmd->args[1], matches, MAX_FILES);
+    if (mcount == 0) {
+        fprintf(stderr, "cat: aucune correspondance pour '%s'\n", cmd->args[1]);
+        return -1;
+    }
 
-    int idx = -1;
-    for (int i = 0; i < MAX_FILES; i++) {
-        if (shell->fs->inodes[i].filename[0] != '\0') {
-            char full_path[MAX_PATH];
-            if (strcmp(shell->fs->inodes[i].parent_path, "/") == 0) {
-                snprintf(full_path, MAX_PATH, "/%s", shell->fs->inodes[i].filename);
-            } else {
-                snprintf(full_path, MAX_PATH, "%s/%s", shell->fs->inodes[i].parent_path,
-                         shell->fs->inodes[i].filename);
-            }
-            if (strcmp(full_path, resolved) == 0) {
-                idx = i;
-                break;
-            }
+    int ret = 0;
+    for (int mi = 0; mi < mcount; mi++) {
+        int is_dir = 0;
+        int idx = inode_index_for_path(shell, matches[mi], &is_dir);
+        if (idx == -1) {
+            fprintf(stderr, "cat: '%s' introuvable\n", matches[mi]);
+            ret = -1;
+            continue;
+        }
+        if (is_dir) {
+            fprintf(stderr, "cat: '%s' est un répertoire\n", matches[mi]);
+            ret = -1;
+            continue;
+        }
+
+        Inode *inode = &shell->fs->inodes[idx];
+        fseek(shell->fs->container, (long)inode->offset, SEEK_SET);
+
+        char buffer[BLOCK_SIZE];
+        uint64_t remaining = inode->size;
+
+        while (remaining > 0) {
+            size_t to_read = (remaining < BLOCK_SIZE) ? (size_t)remaining : BLOCK_SIZE;
+            size_t bytes_read = fread(buffer, 1, to_read, shell->fs->container);
+            fwrite(buffer, 1, bytes_read, stdout);
+            remaining -= bytes_read;
+        }
+
+        if (inode->size > 0 && buffer[(inode->size - 1) % BLOCK_SIZE] != '\n') {
+            printf("\n");
         }
     }
 
-    if (idx == -1) {
-        fprintf(stderr, "cat: '%s' introuvable\n", resolved);
-        free(resolved);
-        return -1;
-    }
-
-    if (shell->fs->inodes[idx].is_directory) {
-        fprintf(stderr, "cat: '%s' est un répertoire\n", resolved);
-        free(resolved);
-        return -1;
-    }
-
-    Inode *inode = &shell->fs->inodes[idx];
-    fseek(shell->fs->container, (long)inode->offset, SEEK_SET);
-
-    char buffer[BLOCK_SIZE];
-    uint64_t remaining = inode->size;
-
-    while (remaining > 0) {
-        size_t to_read = (remaining < BLOCK_SIZE) ? (size_t)remaining : BLOCK_SIZE;
-        size_t bytes_read = fread(buffer, 1, to_read, shell->fs->container);
-        fwrite(buffer, 1, bytes_read, stdout);
-        remaining -= bytes_read;
-    }
-
-    if (inode->size > 0 && buffer[inode->size % BLOCK_SIZE - 1] != '\n') {
-        printf("\n");
-    }
-
-    free(resolved);
-    return 0;
+    return ret;
 }
 
 static int cmd_extract(Shell *shell, Command *cmd) {
@@ -541,12 +597,60 @@ static int cmd_cp(Shell *shell, Command *cmd) {
         return -1;
     }
 
-    char *src = resolve_path(shell, cmd->args[1]);
-    char *dest = resolve_path(shell, cmd->args[2]);
+    char matches[MAX_FILES][MAX_PATH];
+    int mcount = expand_fs_glob(shell, cmd->args[1], matches, MAX_FILES);
+    if (mcount == 0) {
+        fprintf(stderr, "cp: aucune correspondance pour '%s'\n", cmd->args[1]);
+        return -1;
+    }
 
-    int ret = fs_copy_file(shell->fs, src, dest);
-    free(src);
-    free(dest);
+    char *dest_resolved = resolve_path(shell, cmd->args[2]);
+    strip_trailing_slash(dest_resolved);
+    int dest_is_dir = fs_path_is_dir(shell, dest_resolved);
+    size_t dlen = strlen(cmd->args[2]);
+    if (dlen > 0 && cmd->args[2][dlen - 1] == '/') dest_is_dir = 1;
+
+    if (!dest_is_dir && mcount > 1) {
+        fprintf(stderr, "cp: la destination doit être un répertoire pour plusieurs sources\n");
+        free(dest_resolved);
+        return -1;
+    }
+
+    int ret = 0;
+
+    for (int mi = 0; mi < mcount; mi++) {
+        int is_dir = 0;
+        int idx = inode_index_for_path(shell, matches[mi], &is_dir);
+        if (idx == -1) {
+            fprintf(stderr, "cp: '%s' introuvable\n", matches[mi]);
+            ret = -1;
+            continue;
+        }
+        if (is_dir) {
+            fprintf(stderr, "cp: '%s' est un répertoire (non supporté)\n", matches[mi]);
+            ret = -1;
+            continue;
+        }
+
+        char dest_path[MAX_PATH];
+        if (dest_is_dir) {
+            char base[MAX_FILENAME];
+            basename_from_path(matches[mi], base, sizeof(base));
+            if (strcmp(dest_resolved, "/") == 0) {
+                snprintf(dest_path, sizeof(dest_path), "/%s", base);
+            } else {
+                snprintf(dest_path, sizeof(dest_path), "%s/%s", dest_resolved, base);
+            }
+        } else {
+            strncpy(dest_path, dest_resolved, sizeof(dest_path) - 1);
+            dest_path[sizeof(dest_path) - 1] = '\0';
+        }
+
+        int r = fs_copy_file(shell->fs, matches[mi], dest_path);
+        if (r != 0) ret = r;
+    }
+
+    free(dest_resolved);
     return ret;
 }
 
@@ -556,64 +660,106 @@ static int cmd_mv(Shell *shell, Command *cmd) {
         return -1;
     }
 
-    char *src = resolve_path(shell, cmd->args[1]);
-    char *dest = resolve_path(shell, cmd->args[2]);
+    char matches[MAX_FILES][MAX_PATH];
+    int mcount = expand_fs_glob(shell, cmd->args[1], matches, MAX_FILES);
+    if (mcount == 0) {
+        fprintf(stderr, "mv: aucune correspondance pour '%s'\n", cmd->args[1]);
+        return -1;
+    }
 
-    int ret = fs_move_file(shell->fs, src, dest);
-    free(src);
-    free(dest);
+    char *dest_resolved = resolve_path(shell, cmd->args[2]);
+    strip_trailing_slash(dest_resolved);
+    int dest_is_dir = fs_path_is_dir(shell, dest_resolved);
+    size_t dlen = strlen(cmd->args[2]);
+    if (dlen > 0 && cmd->args[2][dlen - 1] == '/') dest_is_dir = 1;
+
+    if (!dest_is_dir && mcount > 1) {
+        fprintf(stderr, "mv: la destination doit être un répertoire pour plusieurs sources\n");
+        free(dest_resolved);
+        return -1;
+    }
+
+    int ret = 0;
+
+    for (int mi = 0; mi < mcount; mi++) {
+        int is_dir = 0;
+        int idx = inode_index_for_path(shell, matches[mi], &is_dir);
+        if (idx == -1) {
+            fprintf(stderr, "mv: '%s' introuvable\n", matches[mi]);
+            ret = -1;
+            continue;
+        }
+        if (is_dir) {
+            fprintf(stderr, "mv: '%s' est un répertoire (non supporté)\n", matches[mi]);
+            ret = -1;
+            continue;
+        }
+
+        char dest_path[MAX_PATH];
+        if (dest_is_dir) {
+            char base[MAX_FILENAME];
+            basename_from_path(matches[mi], base, sizeof(base));
+            if (strcmp(dest_resolved, "/") == 0) {
+                snprintf(dest_path, sizeof(dest_path), "/%s", base);
+            } else {
+                snprintf(dest_path, sizeof(dest_path), "%s/%s", dest_resolved, base);
+            }
+        } else {
+            strncpy(dest_path, dest_resolved, sizeof(dest_path) - 1);
+            dest_path[sizeof(dest_path) - 1] = '\0';
+        }
+
+        int r = fs_move_file(shell->fs, matches[mi], dest_path);
+        if (r != 0) ret = r;
+    }
+
+    free(dest_resolved);
     return ret;
 }
 
 static int cmd_rm(Shell *shell, Command *cmd) {
-    if (cmd->argc < 2) {
-        fprintf(stderr, "rm: argument requis\n");
-        return -1;
-    }
-
-    char *resolved = resolve_path(shell, cmd->args[1]);
-
-    int idx = -1;
-    for (int i = 0; i < MAX_FILES; i++) {
-        if (shell->fs->inodes[i].filename[0] != '\0') {
-            char full_path[MAX_PATH];
-            if (strcmp(shell->fs->inodes[i].parent_path, "/") == 0) {
-                snprintf(full_path, MAX_PATH, "/%s", shell->fs->inodes[i].filename);
+    // Parse options -r (recursive) and -f (force)
+    int recursive = 0;
+    int force = 0;
+    int first_path = -1;
+    for (int i = 1; i < cmd->argc; i++) {
+        if (cmd->args[i][0] == '-' && cmd->args[i][1] != '\0') {
+            if (strcmp(cmd->args[i], "-r") == 0 || strcmp(cmd->args[i], "-R") == 0) {
+                recursive = 1;
+            } else if (strcmp(cmd->args[i], "-f") == 0) {
+                force = 1;
             } else {
-                snprintf(full_path, MAX_PATH, "%s/%s", shell->fs->inodes[i].parent_path,
-                         shell->fs->inodes[i].filename);
-            }
-            if (strcmp(full_path, resolved) == 0) {
-                idx = i;
-                break;
-            }
-        }
-    }
-
-    if (idx == -1) {
-        fprintf(stderr, "rm: '%s' introuvable\n", resolved);
-        free(resolved);
-        return -1;
-    }
-
-    if (shell->fs->inodes[idx].is_directory) {
-        // Check if directory is empty
-        for (int i = 0; i < MAX_FILES; i++) {
-            if (shell->fs->inodes[i].filename[0] != '\0' &&
-                strcmp(shell->fs->inodes[i].parent_path, resolved) == 0) {
-                fprintf(stderr, "rm: '%s' n'est pas vide\n", resolved);
-                free(resolved);
+                fprintf(stderr, "rm: option inconnue '%s'\n", cmd->args[i]);
                 return -1;
             }
+        } else {
+            first_path = i;
+            break;
         }
     }
 
-    shell->fs->inodes[idx].filename[0] = '\0';
-    shell->fs->sb.num_files--;
+    if (first_path == -1) {
+        if (!force) fprintf(stderr, "rm: argument requis\n");
+        return force ? 0 : -1;
+    }
 
-    printf("Supprimé: %s\n", resolved);
-    free(resolved);
-    return 0;
+    int ret = 0;
+
+    for (int i = first_path; i < cmd->argc; i++) {
+        char matches[MAX_FILES][MAX_PATH];
+        int mcount = expand_fs_glob(shell, cmd->args[i], matches, MAX_FILES);
+        if (mcount == 0) {
+            if (!force) fprintf(stderr, "rm: aucune correspondance pour '%s'\n", cmd->args[i]);
+            if (!force) ret = -1;
+            continue;
+        }
+
+        for (int mi = 0; mi < mcount; mi++) {
+            if (delete_path(shell, matches[mi], recursive, force) != 0 && !force) ret = -1;
+        }
+    }
+
+    return ret;
 }
 
 typedef struct {
@@ -872,24 +1018,32 @@ static int cmd_stat(Shell *shell, Command *cmd) {
     if (len > 1 && resolved[len - 1] == '/') {
         resolved[len - 1] = '\0';
     }
-    int is_dir = 0;
-    int idx = inode_index_for_path(shell, resolved, &is_dir);
+        char matches[MAX_FILES][MAX_PATH];
+        int mcount = expand_fs_glob(shell, cmd->args[1], matches, MAX_FILES);
+        if (mcount == 0) {
+            fprintf(stderr, "stat: aucune correspondance pour '%s'\n", cmd->args[1]);
+            return -1;
+        }
 
-    if (idx == -1 && strcmp(resolved, "/") != 0) {
-        fprintf(stderr, "stat: '%s' introuvable\n", resolved);
-        free(resolved);
-        return -1;
-    }
+        int ret = 0;
+        for (int mi = 0; mi < mcount; mi++) {
+            int is_dir = 0;
+            int idx = inode_index_for_path(shell, matches[mi], &is_dir);
 
-    if (idx == -1) {
-        // Racine virtuelle
-        print_stat_info(resolved, NULL, 1);
-    } else {
-        print_stat_info(resolved, &shell->fs->inodes[idx], is_dir);
-    }
+            if (idx == -1 && strcmp(matches[mi], "/") != 0) {
+                fprintf(stderr, "stat: '%s' introuvable\n", matches[mi]);
+                ret = -1;
+                continue;
+            }
 
-    free(resolved);
-    return 0;
+            if (idx == -1) {
+                print_stat_info(matches[mi], NULL, 1);
+            } else {
+                print_stat_info(matches[mi], &shell->fs->inodes[idx], is_dir);
+            }
+        }
+
+        return ret;
 }
 
 int shell_execute_command(Shell *shell, const char *cmd_line) {
