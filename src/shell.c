@@ -6,6 +6,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <time.h>
+#include <glob.h>
 
 #define BUFFER_SIZE 2048
 #define MAX_ARGS 32
@@ -112,6 +113,81 @@ static int inode_index_for_path(Shell *shell, const char *path, int *is_dir_out)
     }
 
     return -1;
+}
+
+// Match simple avec wildcards '*' (toute séquence) et '?' (un caractère)
+static int wildcard_match(const char *pattern, const char *str) {
+    if (*pattern == '\0') return *str == '\0';
+
+    if (*pattern == '*') {
+        // Consomme zéro ou plusieurs caractères
+        return wildcard_match(pattern + 1, str) || (*str && wildcard_match(pattern, str + 1));
+    }
+
+    if (*pattern == '?') {
+        return *str && wildcard_match(pattern + 1, str + 1);
+    }
+
+    if (*pattern == *str) {
+        return wildcard_match(pattern + 1, str + 1);
+    }
+
+    return 0;
+}
+
+// Normalise un chemin en supprimant un slash final (sauf racine)
+static void strip_trailing_slash(char *path) {
+    size_t len = strlen(path);
+    if (len > 1 && path[len - 1] == '/') path[len - 1] = '\0';
+}
+
+// Retourne vrai si le chemin absolu est un répertoire dans le FS (racine incluse)
+static int fs_path_is_dir(Shell *shell, const char *abs_path) {
+    if (strcmp(abs_path, "/") == 0) return 1;
+    int is_dir = 0;
+    int idx = inode_index_for_path(shell, abs_path, &is_dir);
+    return (idx >= 0) ? is_dir : 0;
+}
+
+// Expansion des wildcards sur chemins FS (absolus ou relatifs au cwd)
+static int expand_fs_glob(Shell *shell, const char *input, char results[][MAX_PATH], int max_results) {
+    char pattern[MAX_PATH];
+
+    if (input[0] == '/') {
+        strncpy(pattern, input, sizeof(pattern) - 1);
+        pattern[sizeof(pattern) - 1] = '\0';
+    } else {
+        if (strcmp(shell->current_path, "/") == 0) {
+            snprintf(pattern, sizeof(pattern), "/%s", input);
+        } else {
+            snprintf(pattern, sizeof(pattern), "%s/%s", shell->current_path, input);
+        }
+    }
+
+    strip_trailing_slash(pattern);
+
+    int count = 0;
+    for (int i = 0; i < MAX_FILES && count < max_results; i++) {
+        if (shell->fs->inodes[i].filename[0] != '\0') {
+            char full_path[MAX_PATH];
+            build_full_path_from_inode(&shell->fs->inodes[i], full_path, sizeof(full_path));
+
+            if (wildcard_match(pattern, full_path)) {
+                strncpy(results[count], full_path, MAX_PATH - 1);
+                results[count][MAX_PATH - 1] = '\0';
+                count++;
+            }
+        }
+    }
+
+    // Support de la racine quand pattern correspond exactement à "/" ou "/*"
+    if ((strcmp(pattern, "/") == 0 || strcmp(pattern, "/*") == 0) && count < max_results) {
+        strncpy(results[count], "/", MAX_PATH - 1);
+        results[count][MAX_PATH - 1] = '\0';
+        count++;
+    }
+
+    return count;
 }
 
 static int cmd_help(Shell *shell, Command *cmd) {
@@ -261,40 +337,72 @@ static int cmd_add(Shell *shell, Command *cmd) {
         return -1;
     }
 
-    const char *src_path = cmd->args[1];
+    glob_t g = {0};
+    int gr = glob(cmd->args[1], 0, NULL, &g);
+    if (gr != 0 || g.gl_pathc == 0) {
+        fprintf(stderr, "add: aucune correspondance pour '%s'\n", cmd->args[1]);
+        globfree(&g);
+        return -1;
+    }
 
-    char dest_path[MAX_PATH];
-    if (cmd->argc == 2) {
-        // Pas de destination fournie : utiliser le répertoire courant + basename
-        char base[MAX_FILENAME];
-        basename_from_path(src_path, base, sizeof(base));
-        if (strcmp(shell->current_path, "/") == 0) {
-            snprintf(dest_path, sizeof(dest_path), "/%s", base);
-        } else {
-            snprintf(dest_path, sizeof(dest_path), "%s/%s", shell->current_path, base);
-        }
-    } else {
-        // Destination fournie
-        strncpy(dest_path, cmd->args[2], sizeof(dest_path) - 1);
-        dest_path[sizeof(dest_path) - 1] = '\0';
+    int src_count = (int)g.gl_pathc;
+    int dest_provided = (cmd->argc >= 3);
 
-        // Si la destination se termine par '/', on ajoute le basename du fichier source
-        size_t len = strlen(dest_path);
-        if (len > 0 && dest_path[len - 1] == '/') {
-            char base[MAX_FILENAME];
-            basename_from_path(src_path, base, sizeof(base));
-            if (len == 1) {
-                // destination = "/"
-                snprintf(dest_path, sizeof(dest_path), "/%s", base);
-            } else {
-                strncat(dest_path, base, sizeof(dest_path) - strlen(dest_path) - 1);
-            }
+    char dest_base[MAX_PATH] = "";
+    char *resolved_dest = NULL;
+    int dest_is_dir = 0;
+
+    if (dest_provided) {
+        strncpy(dest_base, cmd->args[2], sizeof(dest_base) - 1);
+        dest_base[sizeof(dest_base) - 1] = '\0';
+        resolved_dest = resolve_path(shell, dest_base);
+        strip_trailing_slash(resolved_dest);
+        dest_is_dir = fs_path_is_dir(shell, resolved_dest);
+        size_t len = strlen(dest_base);
+        if (len > 0 && dest_base[len - 1] == '/') dest_is_dir = 1;
+
+        if (!dest_is_dir && src_count > 1) {
+            fprintf(stderr, "add: la destination doit être un répertoire pour plusieurs sources\n");
+            free(resolved_dest);
+            globfree(&g);
+            return -1;
         }
     }
 
-    char *resolved = resolve_path(shell, dest_path);
-    int ret = fs_add_file(shell->fs, resolved, src_path);
-    free(resolved);
+    int ret = 0;
+
+    for (int i = 0; i < src_count; i++) {
+        const char *src_path = g.gl_pathv[i];
+        char base[MAX_FILENAME];
+        basename_from_path(src_path, base, sizeof(base));
+
+        char dest_path[MAX_PATH];
+
+        if (dest_provided) {
+            if (dest_is_dir) {
+                if (strcmp(resolved_dest, "/") == 0) {
+                    snprintf(dest_path, sizeof(dest_path), "/%s", base);
+                } else {
+                    snprintf(dest_path, sizeof(dest_path), "%s/%s", resolved_dest, base);
+                }
+            } else {
+                strncpy(dest_path, resolved_dest, sizeof(dest_path) - 1);
+                dest_path[sizeof(dest_path) - 1] = '\0';
+            }
+        } else {
+            if (strcmp(shell->current_path, "/") == 0) {
+                snprintf(dest_path, sizeof(dest_path), "/%s", base);
+            } else {
+                snprintf(dest_path, sizeof(dest_path), "%s/%s", shell->current_path, base);
+            }
+        }
+
+        int r = fs_add_file(shell->fs, dest_path, src_path);
+        if (r != 0) ret = r; // continue mais garde la dernière erreur
+    }
+
+    if (resolved_dest) free(resolved_dest);
+    globfree(&g);
     return ret;
 }
 
@@ -362,26 +470,68 @@ static int cmd_extract(Shell *shell, Command *cmd) {
         return -1;
     }
 
-    char *resolved = resolve_path(shell, cmd->args[1]);
-    
-    // Si pas de destination fournie, utiliser le basename du fichier source
-    char final_dest[MAX_PATH];
-    const char *dest_path = cmd->args[2];
-    
-    if (cmd->argc == 2) {
-        // Pas de destination : utiliser le basename dans le répertoire courant
-        basename_from_path(cmd->args[1], final_dest, sizeof(final_dest));
-        dest_path = final_dest;
-    } else if (dest_path[strlen(dest_path) - 1] == '/') {
-        // Destination se termine par / : c'est un répertoire, ajouter le basename
-        char base[MAX_FILENAME];
-        basename_from_path(cmd->args[1], base, sizeof(base));
-        snprintf(final_dest, sizeof(final_dest), "%s%s", dest_path, base);
-        dest_path = final_dest;
+    char matches[MAX_FILES][MAX_PATH];
+    int mcount = expand_fs_glob(shell, cmd->args[1], matches, MAX_FILES);
+    if (mcount == 0) {
+        fprintf(stderr, "extract: aucune correspondance pour '%s'\n", cmd->args[1]);
+        return -1;
     }
 
-    int ret = fs_extract_file(shell->fs, resolved, dest_path);
-    free(resolved);
+    const char *dest_arg = (cmd->argc >= 3) ? cmd->args[2] : NULL;
+    int dest_is_dir = 0;
+    char dest_base[MAX_PATH] = "";
+
+    if (dest_arg) {
+        strncpy(dest_base, dest_arg, sizeof(dest_base) - 1);
+        dest_base[sizeof(dest_base) - 1] = '\0';
+        size_t len = strlen(dest_base);
+        if (len > 0 && dest_base[len - 1] == '/') dest_is_dir = 1;
+
+        if (!dest_is_dir && mcount > 1) {
+            fprintf(stderr, "extract: la destination doit être un répertoire pour plusieurs sources\n");
+            return -1;
+        }
+    } else {
+        if (mcount > 1) dest_is_dir = 1; // Plusieurs sorties -> courant comme répertoire
+    }
+
+    int ret = 0;
+
+    for (int i = 0; i < mcount; i++) {
+        int is_dir = 0;
+        int idx = inode_index_for_path(shell, matches[i], &is_dir);
+        if (idx == -1) {
+            fprintf(stderr, "extract: '%s' introuvable\n", matches[i]);
+            ret = -1;
+            continue;
+        }
+        if (is_dir) {
+            fprintf(stderr, "extract: '%s' est un répertoire (non supporté)\n", matches[i]);
+            ret = -1;
+            continue;
+        }
+
+        char out_path[MAX_PATH];
+        if (dest_arg) {
+            if (dest_is_dir) {
+                char base[MAX_FILENAME];
+                basename_from_path(matches[i], base, sizeof(base));
+                snprintf(out_path, sizeof(out_path), "%s%s", dest_base, base);
+            } else {
+                strncpy(out_path, dest_base, sizeof(out_path) - 1);
+                out_path[sizeof(out_path) - 1] = '\0';
+            }
+        } else {
+            char base[MAX_FILENAME];
+            basename_from_path(matches[i], base, sizeof(base));
+            strncpy(out_path, base, sizeof(out_path) - 1);
+            out_path[sizeof(out_path) - 1] = '\0';
+        }
+
+        int r = fs_extract_file(shell->fs, matches[i], out_path);
+        if (r != 0) ret = r;
+    }
+
     return ret;
 }
 

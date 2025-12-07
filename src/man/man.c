@@ -111,7 +111,8 @@ static const ManPage man_pages[] = {
             "\n"
             "Sans destination, le fichier est ajouté dans le répertoire courant\n"
             "avec son nom d'origine (basename). Si la destination se termine par '/',\n"
-            "le basename est automatiquement ajouté.",
+            "le basename est automatiquement ajouté. Les wildcards '*' et '?' sont\n"
+            "supportés sur le chemin source (ex: add *.txt /docs/).",
         .options = NULL,
         .examples =
             "add file.txt             Ajoute file.txt dans le répertoire courant\n"
@@ -141,7 +142,9 @@ static const ManPage man_pages[] = {
             "Extrait un fichier du système de fichiers vers le système hôte.\n"
             "\n"
             "Le fichier source doit exister dans le FS. La destination est\n"
-            "un chemin sur le système de fichiers de l'hôte (externe au conteneur).",
+            "un chemin sur le système de fichiers de l'hôte (externe au conteneur).\n"
+            "Les wildcards '*' et '?' sont supportés sur le chemin source\n"
+            "(ex: extract /docs/*.txt /tmp/).",
         .options = NULL,
         .examples =
             "extract /data.csv ./out.csv    Extrait data.csv vers ./out.csv\n"

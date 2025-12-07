@@ -13,6 +13,7 @@ CSFS est un système de fichiers conteneurisé qui stocke des fichiers et réper
 - **Shell interactif** : REPL avec commandes familières (cd, ls, mkdir, cat, etc.)
 - **CLI ergonomique** : Commandes simples pour opérations rapides
 - **Ajout intelligent** : Détection automatique du basename et support des chemins avec `/`
+- **Wildcards** : Support des motifs `*`/`?` pour add/extract (style shell)
 - **Métadonnées** : Timestamps de création/modification pour chaque entrée
 - **Format binaire** : Superblock + table d'inodes + zone de données
 
@@ -101,10 +102,10 @@ Lancez le shell :
 | `find [chemin] [motif]` | Recherche par nom | `find log`, `find /docs report` |
 | `cd <chemin>` | Change de répertoire | `cd /docs`, `cd ..`, `cd /` |
 | `mkdir <chemin>` | Crée un répertoire | `mkdir projets` |
-| `add <fichier> [dest]` | Ajoute un fichier | `add test.txt`, `add file.pdf /docs/` |
+| `add <fichier> [dest]` | Ajoute un fichier (wildcards supportés) | `add *.txt /docs/` |
 | `cat <chemin>` | Affiche un fichier | `cat /docs/readme.txt` |
 | `stat <chemin>` | Métadonnées détaillées | `stat /docs/readme.txt` |
-| `extract <src> [dest]` | Extrait un fichier | `extract /file.txt` ou `extract /file.txt /tmp/` |
+| `extract <src> [dest]` | Extrait fichier(s) (wildcards supportés) | `extract /docs/*.txt /tmp/` |
 | `cp <src> <dest>` | Copie dans le FS | `cp /file.txt /backup/file.txt` |
 | `mv <src> <dest>` | Déplace/renomme | `mv /old.txt /new.txt`, `mv /file.txt /docs/` |
 | `rm <chemin>` | Supprime (répertoire vide ou fichier) | `rm old.txt` |
