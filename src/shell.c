@@ -89,6 +89,10 @@ static int cmd_help(Shell *shell, Command *cmd) {
     printf("  help              - Afficher cette aide\n");
     printf("  pwd               - Afficher le répertoire courant\n");
     printf("  ls [chemin]       - Lister un répertoire (défaut: courant)\n");
+    printf("  tree [options] [chemin] - Affichage arborescent\n");
+    printf("                      -a : afficher métadonnées\n");
+    printf("                      -d : répertoires uniquement\n");
+    printf("                      -L <n> : profondeur max\n");
     printf("  cd <chemin>       - Changer de répertoire\n");
     printf("  mkdir <chemin>    - Créer un répertoire\n");
     printf("  add <chemin> <fichier> - Ajouter un fichier\n");
@@ -351,6 +355,156 @@ static int cmd_rm(Shell *shell, Command *cmd) {
     return 0;
 }
 
+typedef struct {
+    int show_metadata;
+    int dirs_only;
+    int max_depth;
+} TreeOptions;
+
+static void tree_recursive(Shell *shell, const char *path, int depth, TreeOptions *opts, 
+                          int is_last[], int parent_depth) {
+    (void)parent_depth;
+    if (opts->max_depth >= 0 && depth > opts->max_depth) return;
+
+    // Print entries in this directory
+    for (int i = 0; i < MAX_FILES; i++) {
+        if (shell->fs->inodes[i].filename[0] != '\0' &&
+            strcmp(shell->fs->inodes[i].parent_path, path) == 0) {
+
+            if (opts->dirs_only && !shell->fs->inodes[i].is_directory) continue;
+
+            // Print tree characters
+            for (int d = 0; d < depth - 1; d++) {
+                printf("%s   ", is_last[d] ? " " : "│");
+            }
+            if (depth > 0) {
+                // Count remaining entries at this level
+                int remaining = 0;
+                for (int j = i + 1; j < MAX_FILES; j++) {
+                    if (shell->fs->inodes[j].filename[0] != '\0' &&
+                        strcmp(shell->fs->inodes[j].parent_path, path) == 0) {
+                        if (!opts->dirs_only || shell->fs->inodes[j].is_directory) {
+                            remaining++;
+                        }
+                    }
+                }
+                printf("%s── ", remaining == 0 ? "└" : "├");
+                is_last[depth - 1] = (remaining == 0);
+            }
+
+            // Print name
+            if (shell->fs->inodes[i].is_directory) {
+                printf("\033[1;34m%s\033[0m/", shell->fs->inodes[i].filename);
+            } else {
+                printf("%s", shell->fs->inodes[i].filename);
+            }
+
+            // Print metadata if requested
+            if (opts->show_metadata) {
+                if (!shell->fs->inodes[i].is_directory) {
+                    printf(" (%lu B)", (unsigned long)shell->fs->inodes[i].size);
+                }
+                char time_str[20];
+                struct tm *tm_info = localtime(&shell->fs->inodes[i].modified);
+                strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M", tm_info);
+                printf(" [%s]", time_str);
+            }
+            printf("\n");
+
+            // Recurse into subdirectories
+            if (shell->fs->inodes[i].is_directory) {
+                char subdir_path[MAX_PATH];
+                if (strcmp(path, "/") == 0) {
+                    snprintf(subdir_path, MAX_PATH, "/%s", shell->fs->inodes[i].filename);
+                } else {
+                    snprintf(subdir_path, MAX_PATH, "%s/%s", path, shell->fs->inodes[i].filename);
+                }
+                tree_recursive(shell, subdir_path, depth + 1, opts, is_last, depth);
+            }
+        }
+    }
+}
+
+static int cmd_tree(Shell *shell, Command *cmd) {
+    TreeOptions opts = {0, 0, -1};
+    const char *path = NULL;
+
+    // Parse options
+    for (int i = 1; i < cmd->argc; i++) {
+        if (strcmp(cmd->args[i], "-a") == 0) {
+            opts.show_metadata = 1;
+        } else if (strcmp(cmd->args[i], "-d") == 0) {
+            opts.dirs_only = 1;
+        } else if (strcmp(cmd->args[i], "-L") == 0) {
+            if (i + 1 < cmd->argc) {
+                opts.max_depth = atoi(cmd->args[++i]);
+            } else {
+                fprintf(stderr, "tree: -L requiert un argument numérique\n");
+                return -1;
+            }
+        } else if (cmd->args[i][0] != '-') {
+            path = cmd->args[i];
+        } else {
+            fprintf(stderr, "tree: option inconnue '%s'\n", cmd->args[i]);
+            return -1;
+        }
+    }
+
+    if (!path) path = ".";
+
+    char *resolved = resolve_path(shell, path);
+
+    // Check if path exists and is a directory
+    int idx = -1;
+    for (int i = 0; i < MAX_FILES; i++) {
+        if (shell->fs->inodes[i].filename[0] != '\0') {
+            char full_path[MAX_PATH];
+            if (strcmp(shell->fs->inodes[i].parent_path, "/") == 0) {
+                snprintf(full_path, MAX_PATH, "/%s", shell->fs->inodes[i].filename);
+            } else {
+                snprintf(full_path, MAX_PATH, "%s/%s", shell->fs->inodes[i].parent_path,
+                         shell->fs->inodes[i].filename);
+            }
+            if (strcmp(full_path, resolved) == 0) {
+                idx = i;
+                break;
+            }
+        }
+    }
+
+    if (idx != -1 && !shell->fs->inodes[idx].is_directory && strcmp(resolved, "/") != 0) {
+        fprintf(stderr, "tree: '%s' n'est pas un répertoire\n", resolved);
+        free(resolved);
+        return -1;
+    }
+
+    // Print root
+    printf("\033[1;34m%s\033[0m\n", resolved);
+
+    // Tree traversal
+    int is_last[256] = {0};
+    tree_recursive(shell, resolved, 1, &opts, is_last, 0);
+
+    // Count stats
+    int dirs = 0, files = 0;
+    for (int i = 0; i < MAX_FILES; i++) {
+        if (shell->fs->inodes[i].filename[0] != '\0') {
+            if (shell->fs->inodes[i].is_directory) dirs++;
+            else files++;
+        }
+    }
+
+    printf("\n");
+    if (opts.dirs_only) {
+        printf("%d directories\n", dirs);
+    } else {
+        printf("%d directories, %d files\n", dirs, files);
+    }
+
+    free(resolved);
+    return 0;
+}
+
 int shell_execute_command(Shell *shell, const char *cmd_line) {
     if (!cmd_line || cmd_line[0] == '\0') return 0;
 
@@ -370,6 +524,8 @@ int shell_execute_command(Shell *shell, const char *cmd_line) {
         ret = cmd_pwd(shell, &cmd);
     } else if (strcmp(command, "ls") == 0) {
         ret = cmd_ls(shell, &cmd);
+    } else if (strcmp(command, "tree") == 0) {
+        ret = cmd_tree(shell, &cmd);
     } else if (strcmp(command, "cd") == 0) {
         ret = cmd_cd(shell, &cmd);
     } else if (strcmp(command, "mkdir") == 0) {
