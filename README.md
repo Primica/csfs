@@ -102,10 +102,10 @@ Lancez le shell :
 | `find [chemin] [motif]` | Recherche par nom | `find log`, `find /docs report` |
 | `cd <chemin>` | Change de répertoire | `cd /docs`, `cd ..`, `cd /` |
 | `mkdir <chemin>` | Crée un répertoire | `mkdir projets` |
-| `add <fichier> [dest]` | Ajoute un fichier (wildcards supportés) | `add *.txt /docs/` |
+| `add [-r] <fichier> [dest]` | Ajoute fichier(s)/répertoires (wildcards, récursif) | `add *.txt /docs/`, `add -r ./mydir /backup/` |
 | `cat <chemin>` | Affiche un fichier | `cat /docs/readme.txt` |
 | `stat <chemin>` | Métadonnées détaillées | `stat /docs/readme.txt` |
-| `extract <src> [dest]` | Extrait fichier(s) (wildcards supportés) | `extract /docs/*.txt /tmp/` |
+| `extract [-r] <src> [dest]` | Extrait fichier(s)/répertoires (wildcards, récursif) | `extract /docs/*.txt /tmp/`, `extract -r /docs /tmp/backup/` |
 | `cp <src> <dest>` | Copie dans le FS (wildcards) | `cp /file*.txt /backup/` |
 | `mv <src> <dest>` | Déplace/renomme (wildcards) | `mv /old*.txt /new/` |
 | `rm [-r] [-f] <chemin>` | Supprime fichiers/répertoires (wildcards, récursif/force) | `rm -rf /logs/` |

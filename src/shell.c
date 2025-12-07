@@ -7,6 +7,8 @@
 #include <ctype.h>
 #include <time.h>
 #include <glob.h>
+#include <ftw.h>
+#include <sys/stat.h>
 
 #define BUFFER_SIZE 2048
 #define MAX_ARGS 32
@@ -396,14 +398,101 @@ static void basename_from_path(const char *path, char *out, size_t out_size) {
     out[out_size - 1] = '\0';
 }
 
+// Créer un répertoire avec tous ses parents
+static int mkdir_p(Shell *shell, const char *path) {
+    if (!path || *path == '\0' || strcmp(path, "/") == 0) return 0;
+    
+    // Vérifier si existe déjà
+    if (fs_path_is_dir(shell, path)) return 0;
+    
+    char temp[MAX_PATH];
+    strncpy(temp, path, sizeof(temp) - 1);
+    temp[sizeof(temp) - 1] = '\0';
+    
+    // Supprimer le trailing slash
+    size_t len = strlen(temp);
+    if (len > 1 && temp[len - 1] == '/') {
+        temp[len - 1] = '\0';
+    }
+    
+    // Trouver le dernier /
+    char *slash = strrchr(temp, '/');
+    if (slash && slash != temp) {
+        *slash = '\0';
+        // Créer récursivement le parent
+        mkdir_p(shell, temp);
+        *slash = '/';
+    }
+    
+    // Créer ce répertoire
+    fs_mkdir(shell->fs, path);
+    return 0;
+}
+
+// Contexte global pour ftw callback dans add récursif
+static Shell *g_add_shell = NULL;
+static char g_add_base_src[MAX_PATH] = "";
+static char g_add_base_dest[MAX_PATH] = "";
+static int g_add_error = 0;
+
+static int add_recursive_callback(const char *fpath, const struct stat *sb, int typeflag, struct FTW *ftwbuf) {
+    (void)sb;
+    (void)ftwbuf;
+    if (typeflag == FTW_D || typeflag == FTW_DNR) {
+        // Répertoire
+        const char *rel = fpath + strlen(g_add_base_src);
+        if (*rel == '/') rel++;
+        if (*rel == '\0') return 0; // racine de la source
+
+        char dest_dir[MAX_PATH];
+        if (strcmp(g_add_base_dest, "/") == 0) {
+            snprintf(dest_dir, sizeof(dest_dir), "/%s", rel);
+        } else {
+            snprintf(dest_dir, sizeof(dest_dir), "%s/%s", g_add_base_dest, rel);
+        }
+        mkdir_p(g_add_shell, dest_dir);
+        return 0;
+    } else if (typeflag == FTW_F) {
+        // Fichier
+        const char *rel = fpath + strlen(g_add_base_src);
+        if (*rel == '/') rel++;
+
+        char dest_file[MAX_PATH];
+        if (strcmp(g_add_base_dest, "/") == 0) {
+            snprintf(dest_file, sizeof(dest_file), "/%s", rel);
+        } else {
+            snprintf(dest_file, sizeof(dest_file), "%s/%s", g_add_base_dest, rel);
+        }
+
+        if (fs_add_file(g_add_shell->fs, dest_file, fpath) != 0) {
+            g_add_error = -1;
+        }
+        return 0;
+    }
+    return 0;
+}
+
 static int cmd_add(Shell *shell, Command *cmd) {
-    if (cmd->argc < 2) {
-        fprintf(stderr, "add: usage -> add <fichier_source> [chemin_fs]\n");
+    int recursive = 0;
+    int first_arg = 1;
+
+    // Parse -r option
+    for (int i = 1; i < cmd->argc; i++) {
+        if (strcmp(cmd->args[i], "-r") == 0 || strcmp(cmd->args[i], "-R") == 0) {
+            recursive = 1;
+            first_arg = i + 1;
+        } else {
+            break;
+        }
+    }
+
+    if (cmd->argc < first_arg + 1) {
+        fprintf(stderr, "add: usage -> add [-r] <fichier_source> [chemin_fs]\n");
         return -1;
     }
 
     glob_t g = {0};
-    int gr = glob(cmd->args[1], 0, NULL, &g);
+    int gr = glob(cmd->args[first_arg], 0, NULL, &g);
     if (gr != 0 || g.gl_pathc == 0) {
         fprintf(stderr, "add: aucune correspondance pour '%s'\n", cmd->args[1]);
         globfree(&g);
@@ -411,14 +500,14 @@ static int cmd_add(Shell *shell, Command *cmd) {
     }
 
     int src_count = (int)g.gl_pathc;
-    int dest_provided = (cmd->argc >= 3);
+    int dest_provided = (cmd->argc >= first_arg + 2);
 
     char dest_base[MAX_PATH] = "";
     char *resolved_dest = NULL;
     int dest_is_dir = 0;
 
     if (dest_provided) {
-        strncpy(dest_base, cmd->args[2], sizeof(dest_base) - 1);
+        strncpy(dest_base, cmd->args[first_arg + 1], sizeof(dest_base) - 1);
         dest_base[sizeof(dest_base) - 1] = '\0';
         resolved_dest = resolve_path(shell, dest_base);
         strip_trailing_slash(resolved_dest);
@@ -438,6 +527,13 @@ static int cmd_add(Shell *shell, Command *cmd) {
 
     for (int i = 0; i < src_count; i++) {
         const char *src_path = g.gl_pathv[i];
+        struct stat st;
+        if (stat(src_path, &st) != 0) {
+            fprintf(stderr, "add: impossible d'accéder à '%s'\n", src_path);
+            ret = -1;
+            continue;
+        }
+
         char base[MAX_FILENAME];
         basename_from_path(src_path, base, sizeof(base));
 
@@ -462,8 +558,30 @@ static int cmd_add(Shell *shell, Command *cmd) {
             }
         }
 
-        int r = fs_add_file(shell->fs, dest_path, src_path);
-        if (r != 0) ret = r; // continue mais garde la dernière erreur
+        if (S_ISDIR(st.st_mode)) {
+            if (!recursive) {
+                fprintf(stderr, "add: '%s' est un répertoire (utiliser -r)\n", src_path);
+                ret = -1;
+                continue;
+            }
+            // Récursif
+            g_add_shell = shell;
+            strncpy(g_add_base_src, src_path, sizeof(g_add_base_src) - 1);
+            strncpy(g_add_base_dest, dest_path, sizeof(g_add_base_dest) - 1);
+            g_add_error = 0;
+
+            // Créer le répertoire racine avec parents
+            mkdir_p(shell, dest_path);
+
+            if (nftw(src_path, add_recursive_callback, 20, FTW_PHYS) != 0) {
+                fprintf(stderr, "add: erreur lors du parcours de '%s'\n", src_path);
+                ret = -1;
+            }
+            if (g_add_error != 0) ret = g_add_error;
+        } else {
+            int r = fs_add_file(shell->fs, dest_path, src_path);
+            if (r != 0) ret = r;
+        }
     }
 
     if (resolved_dest) free(resolved_dest);
@@ -520,20 +638,60 @@ static int cmd_cat(Shell *shell, Command *cmd) {
     return ret;
 }
 
+static void extract_recursive_dir(Shell *shell, const char *fs_path, const char *host_base, int *error) {
+    // Créer le répertoire hôte
+    char mkdir_cmd[MAX_PATH * 2];
+    snprintf(mkdir_cmd, sizeof(mkdir_cmd), "mkdir -p %s", host_base);
+    system(mkdir_cmd);
+
+    // Parcourir les enfants
+    for (int i = 0; i < MAX_FILES; i++) {
+        if (shell->fs->inodes[i].filename[0] != '\0' &&
+            strcmp(shell->fs->inodes[i].parent_path, fs_path) == 0) {
+            char child_fs[MAX_PATH];
+            build_full_path_from_inode(&shell->fs->inodes[i], child_fs, sizeof(child_fs));
+
+            char child_host[MAX_PATH];
+            snprintf(child_host, sizeof(child_host), "%s/%s", host_base, shell->fs->inodes[i].filename);
+
+            if (shell->fs->inodes[i].is_directory) {
+                extract_recursive_dir(shell, child_fs, child_host, error);
+            } else {
+                if (fs_extract_file(shell->fs, child_fs, child_host) != 0) {
+                    *error = -1;
+                }
+            }
+        }
+    }
+}
+
 static int cmd_extract(Shell *shell, Command *cmd) {
-    if (cmd->argc < 2) {
-        fprintf(stderr, "extract: usage -> extract <chemin_fs> [destination]\n");
+    int recursive = 0;
+    int first_arg = 1;
+
+    // Parse -r option
+    for (int i = 1; i < cmd->argc; i++) {
+        if (strcmp(cmd->args[i], "-r") == 0 || strcmp(cmd->args[i], "-R") == 0) {
+            recursive = 1;
+            first_arg = i + 1;
+        } else {
+            break;
+        }
+    }
+
+    if (cmd->argc < first_arg + 1) {
+        fprintf(stderr, "extract: usage -> extract [-r] <chemin_fs> [destination]\n");
         return -1;
     }
 
     char matches[MAX_FILES][MAX_PATH];
-    int mcount = expand_fs_glob(shell, cmd->args[1], matches, MAX_FILES);
+    int mcount = expand_fs_glob(shell, cmd->args[first_arg], matches, MAX_FILES);
     if (mcount == 0) {
-        fprintf(stderr, "extract: aucune correspondance pour '%s'\n", cmd->args[1]);
+        fprintf(stderr, "extract: aucune correspondance pour '%s'\n", cmd->args[first_arg]);
         return -1;
     }
 
-    const char *dest_arg = (cmd->argc >= 3) ? cmd->args[2] : NULL;
+    const char *dest_arg = (cmd->argc >= first_arg + 2) ? cmd->args[first_arg + 1] : NULL;
     int dest_is_dir = 0;
     char dest_base[MAX_PATH] = "";
 
@@ -548,7 +706,7 @@ static int cmd_extract(Shell *shell, Command *cmd) {
             return -1;
         }
     } else {
-        if (mcount > 1) dest_is_dir = 1; // Plusieurs sorties -> courant comme répertoire
+        if (mcount > 1) dest_is_dir = 1;
     }
 
     int ret = 0;
@@ -558,11 +716,6 @@ static int cmd_extract(Shell *shell, Command *cmd) {
         int idx = inode_index_for_path(shell, matches[i], &is_dir);
         if (idx == -1) {
             fprintf(stderr, "extract: '%s' introuvable\n", matches[i]);
-            ret = -1;
-            continue;
-        }
-        if (is_dir) {
-            fprintf(stderr, "extract: '%s' est un répertoire (non supporté)\n", matches[i]);
             ret = -1;
             continue;
         }
@@ -584,8 +737,19 @@ static int cmd_extract(Shell *shell, Command *cmd) {
             out_path[sizeof(out_path) - 1] = '\0';
         }
 
-        int r = fs_extract_file(shell->fs, matches[i], out_path);
-        if (r != 0) ret = r;
+        if (is_dir) {
+            if (!recursive) {
+                fprintf(stderr, "extract: '%s' est un répertoire (utiliser -r)\n", matches[i]);
+                ret = -1;
+                continue;
+            }
+            int err = 0;
+            extract_recursive_dir(shell, matches[i], out_path, &err);
+            if (err != 0) ret = err;
+        } else {
+            int r = fs_extract_file(shell->fs, matches[i], out_path);
+            if (r != 0) ret = r;
+        }
     }
 
     return ret;

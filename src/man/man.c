@@ -106,20 +106,22 @@ static const ManPage man_pages[] = {
     },
     {
         .name = "add",
-        .synopsis = "add <fichier_source> [destination]",
+        .synopsis = "add [-r] <fichier_source> [destination]",
         .description =
-            "Ajoute un fichier externe dans le système de fichiers.\n"
+            "Ajoute un fichier ou répertoire externe dans le système de fichiers.\n"
             "\n"
             "Sans destination, le fichier est ajouté dans le répertoire courant\n"
             "avec son nom d'origine (basename). Si la destination se termine par '/',\n"
             "le basename est automatiquement ajouté. Les wildcards '*' et '?' sont\n"
             "supportés sur le chemin source (ex: add *.txt /docs/).",
-        .options = NULL,
+        .options =
+            "-r, -R          Ajouter récursivement les répertoires et leur contenu",
         .examples =
             "add file.txt             Ajoute file.txt dans le répertoire courant\n"
             "add /tmp/data.csv        Ajoute data.csv depuis /tmp (système hôte)\n"
             "add doc.pdf /docs/       Ajoute comme /docs/doc.pdf\n"
-            "add a.txt /docs/b.txt    Ajoute a.txt en le renommant b.txt",
+            "add a.txt /docs/b.txt    Ajoute a.txt en le renommant b.txt\n"
+            "add -r ./docs /backup/   Ajoute le répertoire docs récursivement",
         .see_also = "extract, cat, rm"
     },
     {
@@ -139,18 +141,20 @@ static const ManPage man_pages[] = {
     },
     {
         .name = "extract",
-        .synopsis = "extract <source> <destination>",
+        .synopsis = "extract [-r] <source> <destination>",
         .description =
-            "Extrait un fichier du système de fichiers vers le système hôte.\n"
+            "Extrait un fichier ou répertoire du système de fichiers vers le système hôte.\n"
             "\n"
             "Le fichier source doit exister dans le FS. La destination est\n"
             "un chemin sur le système de fichiers de l'hôte (externe au conteneur).\n"
             "Les wildcards '*' et '?' sont supportés sur le chemin source\n"
             "(ex: extract /docs/*.txt /tmp/).",
-        .options = NULL,
+        .options =
+            "-r, -R          Extraire récursivement les répertoires et leur contenu",
         .examples =
             "extract /data.csv ./out.csv    Extrait data.csv vers ./out.csv\n"
-            "extract notes.txt /tmp/n.txt   Extrait vers /tmp (système hôte)",
+            "extract notes.txt /tmp/n.txt   Extrait vers /tmp (système hôte)\n"
+            "extract -r /docs /tmp/backup/  Extrait le répertoire docs récursivement",
         .see_also = "add, cat, cp"
     },
     {
