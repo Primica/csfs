@@ -1,4 +1,5 @@
 #include "shell.h"
+#include "man.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -86,21 +87,38 @@ static int cmd_help(Shell *shell, Command *cmd) {
     (void)cmd;
 
     printf("\nCommandes disponibles:\n");
-    printf("  help              - Afficher cette aide\n");
+    printf("  help              - Afficher cette aide rapide\n");
+    printf("  man <commande>    - Afficher le manuel d'une commande\n");
     printf("  pwd               - Afficher le répertoire courant\n");
-    printf("  ls [chemin]       - Lister un répertoire (défaut: courant)\n");
-    printf("  tree [options] [chemin] - Affichage arborescent\n");
-    printf("                      -a : afficher métadonnées\n");
-    printf("                      -d : répertoires uniquement\n");
-    printf("                      -L <n> : profondeur max\n");
+    printf("  ls [chemin]       - Lister un répertoire\n");
+    printf("  tree [options]    - Affichage arborescent\n");
     printf("  cd <chemin>       - Changer de répertoire\n");
     printf("  mkdir <chemin>    - Créer un répertoire\n");
-    printf("  add <chemin> <fichier> - Ajouter un fichier\n");
+    printf("  add <fichier>     - Ajouter un fichier\n");
     printf("  cat <chemin>      - Afficher le contenu d'un fichier\n");
-    printf("  extract <chemin> <dest> - Extraire un fichier\n");
+    printf("  extract <src> <dest> - Extraire un fichier\n");
     printf("  rm <chemin>       - Supprimer un fichier/répertoire\n");
     printf("  exit              - Quitter le shell\n");
-    printf("\n");
+    printf("\nPour plus de détails: man <commande>\n");
+    printf("Liste complète: man --list\n\n");
+    return 0;
+}
+
+static int cmd_man(Shell *shell, Command *cmd) {
+    (void)shell;
+
+    if (cmd->argc < 2) {
+        printf("Usage: man <commande>\n");
+        printf("       man --list    Liste toutes les pages disponibles\n");
+        return -1;
+    }
+
+    if (strcmp(cmd->args[1], "-l") == 0 || strcmp(cmd->args[1], "--list") == 0) {
+        man_list_all();
+        return 0;
+    }
+
+    man_display(cmd->args[1]);
     return 0;
 }
 
@@ -520,6 +538,8 @@ int shell_execute_command(Shell *shell, const char *cmd_line) {
         shell->running = 0;
     } else if (strcmp(command, "help") == 0) {
         ret = cmd_help(shell, &cmd);
+    } else if (strcmp(command, "man") == 0) {
+        ret = cmd_man(shell, &cmd);
     } else if (strcmp(command, "pwd") == 0) {
         ret = cmd_pwd(shell, &cmd);
     } else if (strcmp(command, "ls") == 0) {
