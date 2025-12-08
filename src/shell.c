@@ -1395,50 +1395,173 @@ static int cmd_git(Shell *shell, Command *cmd) {
                 
                 printf("  Branche : %s\n", default_branch);
                 
-                // Try to download several key files
-                const char *files_to_fetch[] = {
-                    "README.md",
-                    "README",
-                    "LICENSE",
-                    "COPYING",
-                    "Makefile",
-                    "CMakeLists.txt",
-                    "setup.py",
-                    ".gitignore",
-                    NULL
-                };
+                // Attempt full clone with archive download
+                printf("  Téléchargement de l'archive complète...\n");
+                
+                // Construct archive download URL
+                char archive_url[1024];
+                snprintf(archive_url, sizeof(archive_url),
+                    "https://github.com/%s/%s/archive/refs/heads/%s.tar.gz",
+                    user, repo, default_branch);
+                
+                char temp_archive[256];
+                snprintf(temp_archive, sizeof(temp_archive), "/tmp/git_archive_%d.tar.gz", (int)time(NULL));
+                
+                char extract_dir[256];
+                snprintf(extract_dir, sizeof(extract_dir), "/tmp/git_extract_%d", (int)time(NULL));
+                
+                // Download archive
+                char dl_cmd[2048];
+                snprintf(dl_cmd, sizeof(dl_cmd),
+                    "curl -s -L -m 30 '%s' -o '%s' 2>/dev/null && file '%s' | grep -q gzip && echo 1 || echo 0",
+                    archive_url, temp_archive, temp_archive);
+                
+                FILE *dl_fp = popen(dl_cmd, "r");
+                int archive_downloaded = 0;
+                if (dl_fp) {
+                    char result[10];
+                    if (fgets(result, sizeof(result), dl_fp) && result[0] == '1') {
+                        archive_downloaded = 1;
+                    }
+                    pclose(dl_fp);
+                }
                 
                 int files_downloaded = 0;
                 
-                for (int i = 0; files_to_fetch[i] != NULL; i++) {
-                    snprintf(download_url, sizeof(download_url), 
-                        "https://raw.githubusercontent.com/%s/%s/%s/%s", 
-                        user, repo, default_branch, files_to_fetch[i]);
+                if (archive_downloaded) {
+                    // Extract archive
+                    char extract_cmd[1024];
+                    snprintf(extract_cmd, sizeof(extract_cmd),
+                        "cd /tmp && mkdir -p 'git_extract_%d' && tar -xzf '%s' -C 'git_extract_%d' --strip-components=1 2>/dev/null && echo 1 || echo 0",
+                        (int)time(NULL), temp_archive, (int)time(NULL));
                     
-                    char cmd_str[2048];
-                    char temp_file[256];
-                    snprintf(temp_file, sizeof(temp_file), "/tmp/git_clone_%d_%d.tmp", (int)time(NULL), i);
+                    // Use the correct temp extract dir
+                    snprintf(extract_cmd, sizeof(extract_cmd),
+                        "mkdir -p '%s' && tar -xzf '%s' -C '%s' --strip-components=1 2>/dev/null",
+                        extract_dir, temp_archive, extract_dir);
                     
-                    snprintf(cmd_str, sizeof(cmd_str), 
-                        "curl -s -m 5 -L '%s' -o '%s' 2>/dev/null && test -s '%s' && echo 1 || echo 0", 
-                        download_url, temp_file, temp_file);
+                    int extract_result = system(extract_cmd);
                     
-                    FILE *fp = popen(cmd_str, "r");
-                    if (fp) {
-                        char result[10];
-                        if (fgets(result, sizeof(result), fp) && result[0] == '1') {
-                            struct stat st;
-                            if (stat(temp_file, &st) == 0 && st.st_size > 0) {
-                                // Add the file to our filesystem
+                    if (extract_result == 0) {
+                        // Recursively add extracted files to filesystem
+                        typedef struct {
+                            Shell *shell;
+                            const char *clone_path;
+                            const char *extract_dir;
+                            int file_count;
+                        } AddFilesContext;
+                        
+                        AddFilesContext ctx = {
+                            .shell = shell,
+                            .clone_path = clone_path,
+                            .extract_dir = extract_dir,
+                            .file_count = 0
+                        };
+                        
+                        // Walk extracted directory
+                        char walk_cmd[2048];
+                        snprintf(walk_cmd, sizeof(walk_cmd),
+                            "find '%s' -type f | head -50", extract_dir);
+                        
+                        FILE *find_fp = popen(walk_cmd, "r");
+                        if (find_fp) {
+                            char filepath[MAX_PATH];
+                            while (fgets(filepath, sizeof(filepath), find_fp)) {
+                                // Remove newline
+                                filepath[strcspn(filepath, "\n")] = 0;
+                                
+                                // Get relative path
+                                char *rel_path = filepath + strlen(extract_dir);
+                                if (rel_path[0] == '/') rel_path++;
+                                
+                                // Skip if empty or hidden files at root
+                                if (*rel_path == '\0') continue;
+                                
+                                // Build filesystem path
                                 char fs_path[MAX_PATH];
-                                snprintf(fs_path, sizeof(fs_path), "%s/%s", clone_path, files_to_fetch[i]);
-                                fs_add_file(shell->fs, fs_path, temp_file);
-                                printf("  ✓ %s (%lld B)\n", files_to_fetch[i], (long long)st.st_size);
-                                files_downloaded++;
+                                snprintf(fs_path, sizeof(fs_path), "%s/%s", clone_path, rel_path);
+                                
+                                // Create parent directories if needed
+                                char parent[MAX_PATH];
+                                strncpy(parent, fs_path, sizeof(parent) - 1);
+                                char *last_slash = strrchr(parent, '/');
+                                if (last_slash && last_slash != parent) {
+                                    *last_slash = '\0';
+                                    mkdir_p(shell, parent);
+                                }
+                                
+                                // Add file
+                                if (fs_add_file(shell->fs, fs_path, filepath) == 0) {
+                                    struct stat st;
+                                    if (stat(filepath, &st) == 0) {
+                                        printf("  ✓ %s (%lld B)\n", rel_path, (long long)st.st_size);
+                                        files_downloaded++;
+                                        ctx.file_count++;
+                                    }
+                                }
+                                
+                                // Limit files to avoid flooding filesystem
+                                if (ctx.file_count >= 100) {
+                                    printf("  ... (limité à 100 fichiers)\n");
+                                    break;
+                                }
                             }
-                            unlink(temp_file);
+                            pclose(find_fp);
                         }
-                        pclose(fp);
+                    }
+                    
+                    // Cleanup
+                    char cleanup_cmd[512];
+                    snprintf(cleanup_cmd, sizeof(cleanup_cmd), "rm -rf '%s'", extract_dir);
+                    system(cleanup_cmd);
+                    unlink(temp_archive);
+                }
+                
+                if (files_downloaded == 0) {
+                    // Fallback: download key files if archive failed
+                    printf("  Archive failed, téléchargement des fichiers clés...\n");
+                    
+                    const char *files_to_fetch[] = {
+                        "README.md",
+                        "README",
+                        "LICENSE",
+                        "COPYING",
+                        "Makefile",
+                        "CMakeLists.txt",
+                        "setup.py",
+                        ".gitignore",
+                        NULL
+                    };
+                    
+                    for (int i = 0; files_to_fetch[i] != NULL; i++) {
+                        snprintf(download_url, sizeof(download_url), 
+                            "https://raw.githubusercontent.com/%s/%s/%s/%s", 
+                            user, repo, default_branch, files_to_fetch[i]);
+                        
+                        char cmd_str[2048];
+                        char temp_file[256];
+                        snprintf(temp_file, sizeof(temp_file), "/tmp/git_clone_%d_%d.tmp", (int)time(NULL), i);
+                        
+                        snprintf(cmd_str, sizeof(cmd_str), 
+                            "curl -s -m 5 -L '%s' -o '%s' 2>/dev/null && test -s '%s' && echo 1 || echo 0", 
+                            download_url, temp_file, temp_file);
+                        
+                        FILE *fp = popen(cmd_str, "r");
+                        if (fp) {
+                            char result[10];
+                            if (fgets(result, sizeof(result), fp) && result[0] == '1') {
+                                struct stat st;
+                                if (stat(temp_file, &st) == 0 && st.st_size > 0) {
+                                    char fs_path[MAX_PATH];
+                                    snprintf(fs_path, sizeof(fs_path), "%s/%s", clone_path, files_to_fetch[i]);
+                                    fs_add_file(shell->fs, fs_path, temp_file);
+                                    printf("  ✓ %s (%lld B)\n", files_to_fetch[i], (long long)st.st_size);
+                                    files_downloaded++;
+                                }
+                                unlink(temp_file);
+                            }
+                            pclose(fp);
+                        }
                     }
                 }
                 

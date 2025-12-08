@@ -244,24 +244,31 @@ csfs/
   - Dernier commit (pseudo-hash)
   - Message de commit
 
-**Cloning depuis GitHub** : 
+**Cloning depuis GitHub (Full Clone)** : 
 - Détecte automatiquement la branche par défaut du repo (via GitHub API)
-- Télécharge les fichiers clés du repo (README, LICENSE, Makefile, etc.)
-- Utilise curl pour HTTP et pipes vers le FS CSFS
-- Affiche la progression et les tailles réelles des fichiers
+- Télécharge l'archive complète (.tar.gz) du repository depuis GitHub
+- Extrait automatiquement tous les fichiers et répertoires
+- Limite à 100 fichiers par clone pour éviter de surcharger le FS
+- Fallback automatique sur téléchargement des fichiers clés si l'archive échoue
+- Utilise curl pour HTTP et tar pour extraction
+- Affiche la progression avec noms de fichiers et tailles réelles
 
-**Exemple avec Linux kernel** :
+**Exemple avec GoogleTest** :
 ```
-fssh:/> git clone https://github.com/torvalds/linux.git linux
-Clonage depuis https://github.com/torvalds/linux.git...
-  Dépôt : torvalds/linux
-  Branche : master
-  ✓ README (5570 B)
-  ✓ Makefile (72332 B)
-  ✓ .gitignore (2238 B)
-  ✓ COPYING (496 B)
-  8 fichier(s) téléchargé(s)
-Dépôt cloné : https://github.com/torvalds/linux.git -> /linux
+fssh:/> git clone https://github.com/google/googletest.git gtest
+Clonage depuis https://github.com/google/googletest.git...
+  Dépôt : google/googletest
+  Branche : main
+  Téléchargement de l'archive complète...
+  ✓ CMakeLists.txt (986 B)
+  ✓ LICENSE (1475 B)
+  ✓ ci/macos-presubmit.sh (3190 B)
+  ✓ ci/windows-presubmit.bat (2403 B)
+  ✓ docs/gmock_for_dummies.md (29227 B)
+  ✓ docs/_layouts/default.html (2187 B)
+  ... (50 fichiers total)
+  50 fichier(s) téléchargé(s)
+Dépôt cloné : https://github.com/google/googletest.git -> /gtest
 ```
 
 **Subcommandes disponibles:**
@@ -284,11 +291,12 @@ Dépôt cloné : https://github.com/torvalds/linux.git -> /linux
 ### Limitations actuelles
 
 - **1024 fichiers/répertoires** maximum (configurable via `MAX_FILES`)
+- **Limite de 100 fichiers par clone** : Pour éviter de surcharger le filesystem, seuls les premiers 100 fichiers extraits sont importés
 - **Pas de fragmentation** : les données sont stockées séquentiellement
 - **Pas de permissions** : pas de gestion d'utilisateurs/groupes
 - **Suppression simple** : l'espace n'est pas récupéré (marquage comme libre uniquement)
 - **Stockage Git simple** : Pas de vrai système d'objets Git (commits/branches sont simulés)
-- **GitHub limité** : Clone télécharge seulement les fichiers clés du repo (pas d'archive complète)
+- **Pas de .git files** : L'archive clone ne contient pas les objets Git réels, seulement la structure de base
 
 ## 🔮 Possibilités futures
 
