@@ -20,6 +20,9 @@ typedef struct {
     int argc;
 } Command;
 
+// Forward declarations
+static int mkdir_p(Shell *shell, const char *path);
+
 // Git Manager Implementation
 GitManager *git_manager_create(int max_repos) {
     GitManager *manager = malloc(sizeof(GitManager));
@@ -29,6 +32,16 @@ GitManager *git_manager_create(int max_repos) {
         free(manager);
         return NULL;
     }
+    
+    // Initialize all repositories
+    for (int i = 0; i < max_repos; i++) {
+        manager->repos[i].commits = malloc(sizeof(GitCommit) * MAX_COMMITS);
+        manager->repos[i].commit_count = 0;
+        manager->repos[i].max_commits = MAX_COMMITS;
+        manager->repos[i].branch_count = 0;
+        manager->repos[i].staged_count = 0;
+    }
+    
     manager->repo_count = 0;
     manager->max_repos = max_repos;
     return manager;
@@ -36,6 +49,12 @@ GitManager *git_manager_create(int max_repos) {
 
 void git_manager_destroy(GitManager *manager) {
     if (manager) {
+        // Free commit history for each repo
+        for (int i = 0; i < manager->repo_count; i++) {
+            if (manager->repos[i].commits) {
+                free(manager->repos[i].commits);
+            }
+        }
         free(manager->repos);
         free(manager);
     }
@@ -79,6 +98,84 @@ static void extract_repo_name(const char *url, char *name, size_t name_size) {
     if (len > 4 && strcmp(name + len - 4, ".git") == 0) {
         name[len - 4] = '\0';
     }
+}
+
+// Generate a commit hash based on timestamp and content
+static void generate_commit_hash(char *hash, const char *message) {
+    unsigned int seed = (unsigned int)time(NULL) ^ rand();
+    snprintf(hash, 41, "%08x%08x%08x%08x%08x",
+        (unsigned int)(seed ^ strlen(message)),
+        (unsigned int)(seed + 12345),
+        (unsigned int)(message[0] ^ 0xDEADBEEF),
+        (unsigned int)(time(NULL) & 0xFFFFFFFF),
+        (unsigned int)rand());
+}
+
+// Add a commit to repository history
+static int git_add_commit(GitRepository *repo, const char *message, const char *branch) {
+    if (repo->commit_count >= repo->max_commits) {
+        return -1; // Commit history full
+    }
+    
+    GitCommit *commit = &repo->commits[repo->commit_count];
+    
+    // Generate commit hash
+    generate_commit_hash(commit->hash, message);
+    
+    // Set commit details
+    strncpy(commit->message, message, sizeof(commit->message) - 1);
+    commit->message[sizeof(commit->message) - 1] = '\0';
+    
+    strncpy(commit->author, "CSFS Git", sizeof(commit->author) - 1);
+    commit->author[sizeof(commit->author) - 1] = '\0';
+    
+    strncpy(commit->branch, branch ? branch : "main", sizeof(commit->branch) - 1);
+    commit->branch[sizeof(commit->branch) - 1] = '\0';
+    
+    // Set timestamp
+    time_t now = time(NULL);
+    struct tm *timeinfo = localtime(&now);
+    strftime(commit->timestamp, sizeof(commit->timestamp), 
+             "%a %b %d %H:%M:%S %Y", timeinfo);
+    
+    repo->commit_count++;
+    return 0;
+}
+
+// Write commit history to .git file
+static int git_write_commit_log(Shell *shell, GitRepository *repo) {
+    if (!shell || !repo) return -1;
+    
+    // Create a log file in .git directory
+    char log_path[MAX_PATH];
+    snprintf(log_path, sizeof(log_path), "%s/.git/logs", repo->clone_path);
+    
+    // Create logs directory
+    mkdir_p(shell, log_path);
+    
+    // Create HEAD log
+    char head_log[MAX_PATH];
+    snprintf(head_log, sizeof(head_log), "%s/HEAD", log_path);
+    
+    // Create temporary file with history
+    char temp_file[256];
+    snprintf(temp_file, sizeof(temp_file), "/tmp/git_log_%d.tmp", (int)time(NULL));
+    
+    FILE *fp = fopen(temp_file, "w");
+    if (!fp) return -1;
+    
+    // Write all commits to log file
+    for (int i = 0; i < repo->commit_count; i++) {
+        GitCommit *c = &repo->commits[i];
+        fprintf(fp, "%s %s %s\n", c->hash, c->branch, c->message);
+    }
+    fclose(fp);
+    
+    // Add to filesystem
+    fs_add_file(shell->fs, head_log, temp_file);
+    unlink(temp_file);
+    
+    return 0;
 }
 
 static void print_prompt(const Shell *shell) {
@@ -1585,8 +1682,15 @@ static int cmd_git(Shell *shell, Command *cmd) {
         repo->clone_path[sizeof(repo->clone_path) - 1] = '\0';
         repo->cloned = 1;
         strncpy(repo->current_branch, "main", sizeof(repo->current_branch) - 1);
-        strcpy(repo->last_commit, "0000000000000000000000000000000000000000");
-        strcpy(repo->last_commit_msg, "Initial commit");
+        
+        // Add initial commit to history
+        git_add_commit(repo, "Initial commit", "main");
+        
+        // Add branch to list
+        if (repo->branch_count < 20) {
+            strncpy(repo->branches[repo->branch_count], "main", sizeof(repo->branches[0]) - 1);
+            repo->branch_count++;
+        }
 
         shell->git_manager->repo_count++;
         printf("Dépôt cloné : %s -> %s\n", url, clone_path);
@@ -1608,9 +1712,21 @@ static int cmd_git(Shell *shell, Command *cmd) {
             fprintf(stderr, "git add: aucune correspondance pour '%s'\n", cmd->args[2]);
             return -1;
         }
-        printf("Fichiers en staging (%d):\n", mcount);
+        
+        // Add files to staging area
+        int added = 0;
         for (int i = 0; i < mcount; i++) {
-            printf("  M %s\n", matches[i]);
+            if (repo->staged_count < 50) {
+                strncpy(repo->staged_files[repo->staged_count], matches[i], MAX_PATH - 1);
+                repo->staged_files[repo->staged_count][MAX_PATH - 1] = '\0';
+                repo->staged_count++;
+                added++;
+            }
+        }
+        
+        printf("Fichiers en staging (%d):\n", added);
+        for (int i = 0; i < added && i < mcount; i++) {
+            printf("  + %s\n", matches[i]);
         }
         return 0;
 
@@ -1635,16 +1751,21 @@ static int cmd_git(Shell *shell, Command *cmd) {
             fprintf(stderr, "git commit: pas de dépôt trouvé\n");
             return -1;
         }
-        unsigned int hash = 0;
-        for (const char *p = message; *p; p++) {
-            hash = ((hash << 5) + hash) + *p;
+        
+        // Add commit to history
+        if (git_add_commit(repo, message, repo->current_branch) != 0) {
+            fprintf(stderr, "git commit: impossible d'ajouter le commit (limite atteinte)\n");
+            return -1;
         }
-        hash ^= (unsigned int)time(NULL);
-        snprintf(repo->last_commit, sizeof(repo->last_commit), "%08x%08x%08x%08x%08x",
-                 hash, hash >> 8, hash >> 16, hash >> 24, (unsigned int)time(NULL));
-        strncpy(repo->last_commit_msg, message, sizeof(repo->last_commit_msg) - 1);
-        printf("Commit créé: %s\n", repo->last_commit);
-        printf("Message: %s\n", message);
+        
+        // Write commit log to .git directory
+        git_write_commit_log(shell, repo);
+        
+        // Display commit info
+        GitCommit *latest = &repo->commits[repo->commit_count - 1];
+        printf("Commit créé: %s\n", latest->hash);
+        printf("Branch: %s\n", latest->branch);
+        printf("Message: %s\n", latest->message);
         return 0;
 
     } else if (strcmp(subcommand, "log") == 0) {
@@ -1654,16 +1775,20 @@ static int cmd_git(Shell *shell, Command *cmd) {
             return -1;
         }
         printf("Historique du dépôt: %s\n", repo->name);
-        printf("Branch: %s\n", repo->current_branch);
+        printf("Branch courante: %s\n", repo->current_branch);
         printf("-----\n");
-        if (repo->last_commit[0] != '0' || repo->last_commit[1] != '0') {
-            printf("commit %s\n", repo->last_commit);
-            printf("Author: CSFS Git\n");
-            time_t now = time(NULL);
-            printf("Date: %s", ctime(&now));
-            printf("\n    %s\n\n", repo->last_commit_msg);
-        } else {
+        if (repo->commit_count == 0) {
             printf("Aucun commit (dépôt vide)\n");
+        } else {
+            // Show commits in reverse chronological order (newest first)
+            for (int i = repo->commit_count - 1; i >= 0; i--) {
+                GitCommit *commit = &repo->commits[i];
+                printf("commit %s\n", commit->hash);
+                printf("Author: %s\n", commit->author);
+                printf("Date: %s\n", commit->timestamp);
+                printf("Branch: %s\n", commit->branch);
+                printf("\n    %s\n\n", commit->message);
+            }
         }
         return 0;
 
@@ -1673,11 +1798,30 @@ static int cmd_git(Shell *shell, Command *cmd) {
             fprintf(stderr, "git status: pas de dépôt trouvé\n");
             return -1;
         }
-        printf("Branch: %s\n", repo->current_branch);
+        printf("Dépôt: %s\n", repo->name);
+        printf("Branch courante: %s\n", repo->current_branch);
         printf("URL: %s\n", repo->url);
-        printf("Dernier commit: %s\n", repo->last_commit);
-        printf("Message: %s\n", repo->last_commit_msg);
-        printf("Répertoire: %s\n", repo->clone_path);
+        printf("Chemin local: %s\n", repo->clone_path);
+        printf("\nHistorique:\n");
+        printf("  Total commits: %d\n", repo->commit_count);
+        if (repo->commit_count > 0) {
+            GitCommit *latest = &repo->commits[repo->commit_count - 1];
+            printf("  Dernier commit: %s\n", latest->hash);
+            printf("  Message: %s\n", latest->message);
+        }
+        printf("\nBranches disponibles:\n");
+        for (int i = 0; i < repo->branch_count; i++) {
+            char marker = (strcmp(repo->branches[i], repo->current_branch) == 0) ? '*' : ' ';
+            printf("  %c %s\n", marker, repo->branches[i]);
+        }
+        printf("\nFichiers en staging (%d):\n", repo->staged_count);
+        if (repo->staged_count > 0) {
+            for (int i = 0; i < repo->staged_count; i++) {
+                printf("  + %s\n", repo->staged_files[i]);
+            }
+        } else {
+            printf("  (aucun)\n");
+        }
         return 0;
 
     } else if (strcmp(subcommand, "checkout") == 0) {
@@ -1690,7 +1834,27 @@ static int cmd_git(Shell *shell, Command *cmd) {
             fprintf(stderr, "git checkout: pas de dépôt trouvé\n");
             return -1;
         }
+        
+        // Check if branch exists
+        int branch_exists = 0;
+        for (int i = 0; i < repo->branch_count; i++) {
+            if (strcmp(repo->branches[i], cmd->args[2]) == 0) {
+                branch_exists = 1;
+                break;
+            }
+        }
+        
+        if (!branch_exists) {
+            fprintf(stderr, "git checkout: branche '%s' n'existe pas\n", cmd->args[2]);
+            return -1;
+        }
+        
+        // Clear staging area when changing branches
+        repo->staged_count = 0;
+        
+        // Switch to branch
         strncpy(repo->current_branch, cmd->args[2], sizeof(repo->current_branch) - 1);
+        repo->current_branch[sizeof(repo->current_branch) - 1] = '\0';
         printf("Branche changée à: %s\n", cmd->args[2]);
         return 0;
 
@@ -1700,11 +1864,26 @@ static int cmd_git(Shell *shell, Command *cmd) {
             fprintf(stderr, "git branch: pas de dépôt trouvé\n");
             return -1;
         }
-        printf("Branches disponibles:\n");
-        printf("* %s (courant)\n", repo->current_branch);
-        printf("  develop\n");
-        printf("  feature/test\n");
-        printf("  bugfix/issue-1\n");
+        if (cmd->argc >= 3) {
+            // Create new branch
+            const char *new_branch = cmd->args[2];
+            if (repo->branch_count < 20) {
+                strncpy(repo->branches[repo->branch_count], new_branch, 255);
+                repo->branches[repo->branch_count][255] = '\0';
+                repo->branch_count++;
+                printf("Branch '%s' créée\n", new_branch);
+            } else {
+                fprintf(stderr, "git branch: limite de branches atteinte\n");
+                return -1;
+            }
+        } else {
+            // List branches
+            printf("Branches disponibles:\n");
+            for (int i = 0; i < repo->branch_count; i++) {
+                char marker = (strcmp(repo->branches[i], repo->current_branch) == 0) ? '*' : ' ';
+                printf("%c %s\n", marker, repo->branches[i]);
+            }
+        }
         return 0;
 
     } else if (strcmp(subcommand, "remote") == 0) {
