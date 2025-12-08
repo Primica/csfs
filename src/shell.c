@@ -10,6 +10,7 @@
 #include <glob.h>
 #include <ftw.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #define BUFFER_SIZE 2048
 #define MAX_ARGS 32
@@ -1342,6 +1343,114 @@ static int cmd_git(Shell *shell, Command *cmd) {
         char refs_dir[MAX_PATH];
         snprintf(refs_dir, sizeof(refs_dir), "%s/refs", git_dir);
         mkdir_p(shell, refs_dir);
+
+        // Try to fetch repository content via GitHub API or raw content
+        printf("Clonage depuis %s...\n", url);
+        
+        // Construct GitHub raw content URL if it's a GitHub repo
+        char download_url[1024];
+        if (strstr(url, "github.com") != NULL) {
+            // Convert github.com/user/repo.git to raw GitHub URL
+            char *user_start = strstr(url, "github.com/");
+            if (user_start) {
+                user_start += 11; // skip "github.com/"
+                char user[256], repo[256];
+                sscanf(user_start, "%255[^/]/%255s", user, repo);
+                
+                // Remove .git suffix if present
+                size_t repo_len = strlen(repo);
+                if (repo_len > 4 && strcmp(repo + repo_len - 4, ".git") == 0) {
+                    repo[repo_len - 4] = '\0';
+                }
+                
+                printf("  Dépôt : %s/%s\n", user, repo);
+                
+                // Get default branch from GitHub API
+                char api_cmd[1024];
+                char temp_api_file[256];
+                snprintf(temp_api_file, sizeof(temp_api_file), "/tmp/git_api_%d.tmp", (int)time(NULL));
+                snprintf(api_cmd, sizeof(api_cmd), 
+                    "curl -s 'https://api.github.com/repos/%s/%s' | grep default_branch | sed 's/.*\"default_branch\": \"//; s/\".*//' > '%s' 2>/dev/null",
+                    user, repo, temp_api_file);
+                
+                char default_branch[64] = "main";
+                system(api_cmd);
+                
+                FILE *api_fp = fopen(temp_api_file, "r");
+                if (api_fp) {
+                    if (fgets(default_branch, sizeof(default_branch), api_fp)) {
+                        // Remove newline
+                        size_t len = strlen(default_branch);
+                        if (len > 0 && default_branch[len-1] == '\n') {
+                            default_branch[len-1] = '\0';
+                        }
+                        // Also trim any whitespace
+                        while (len > 0 && (default_branch[len-1] == ' ' || default_branch[len-1] == '\r')) {
+                            default_branch[--len] = '\0';
+                        }
+                    }
+                    fclose(api_fp);
+                }
+                unlink(temp_api_file);
+                
+                printf("  Branche : %s\n", default_branch);
+                
+                // Try to download several key files
+                const char *files_to_fetch[] = {
+                    "README.md",
+                    "README",
+                    "LICENSE",
+                    "COPYING",
+                    "Makefile",
+                    "CMakeLists.txt",
+                    "setup.py",
+                    ".gitignore",
+                    NULL
+                };
+                
+                int files_downloaded = 0;
+                
+                for (int i = 0; files_to_fetch[i] != NULL; i++) {
+                    snprintf(download_url, sizeof(download_url), 
+                        "https://raw.githubusercontent.com/%s/%s/%s/%s", 
+                        user, repo, default_branch, files_to_fetch[i]);
+                    
+                    char cmd_str[2048];
+                    char temp_file[256];
+                    snprintf(temp_file, sizeof(temp_file), "/tmp/git_clone_%d_%d.tmp", (int)time(NULL), i);
+                    
+                    snprintf(cmd_str, sizeof(cmd_str), 
+                        "curl -s -m 5 -L '%s' -o '%s' 2>/dev/null && test -s '%s' && echo 1 || echo 0", 
+                        download_url, temp_file, temp_file);
+                    
+                    FILE *fp = popen(cmd_str, "r");
+                    if (fp) {
+                        char result[10];
+                        if (fgets(result, sizeof(result), fp) && result[0] == '1') {
+                            struct stat st;
+                            if (stat(temp_file, &st) == 0 && st.st_size > 0) {
+                                // Add the file to our filesystem
+                                char fs_path[MAX_PATH];
+                                snprintf(fs_path, sizeof(fs_path), "%s/%s", clone_path, files_to_fetch[i]);
+                                fs_add_file(shell->fs, fs_path, temp_file);
+                                printf("  ✓ %s (%lld B)\n", files_to_fetch[i], (long long)st.st_size);
+                                files_downloaded++;
+                            }
+                            unlink(temp_file);
+                        }
+                        pclose(fp);
+                    }
+                }
+                
+                if (files_downloaded > 0) {
+                    printf("  %d fichier(s) téléchargé(s)\n", files_downloaded);
+                } else {
+                    printf("  (Fichiers non trouvés - structure de dépôt créée)\n");
+                }
+            }
+        } else {
+            printf("  (Clone non-GitHub - structure de dépôt créée)\n");
+        }
 
         // Add to repository list
         GitRepository *repo = &shell->git_manager->repos[shell->git_manager->repo_count];

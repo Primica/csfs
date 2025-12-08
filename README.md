@@ -234,18 +234,38 @@ csfs/
 └─────────────────┘
 ```
 
-### Système Git (Modular)
+### Système Git avec Cloning Réel
 
 **GitManager** gère plusieurs dépôts avec :
 - **Repository Structure** : Chaque dépôt maintient :
   - URL d'origine
   - Répertoire `.git` avec `objects/` et `refs/`
-  - Branche courante
+  - Branche courante (détectée automatiquement)
   - Dernier commit (pseudo-hash)
   - Message de commit
 
+**Cloning depuis GitHub** : 
+- Détecte automatiquement la branche par défaut du repo (via GitHub API)
+- Télécharge les fichiers clés du repo (README, LICENSE, Makefile, etc.)
+- Utilise curl pour HTTP et pipes vers le FS CSFS
+- Affiche la progression et les tailles réelles des fichiers
+
+**Exemple avec Linux kernel** :
+```
+fssh:/> git clone https://github.com/torvalds/linux.git linux
+Clonage depuis https://github.com/torvalds/linux.git...
+  Dépôt : torvalds/linux
+  Branche : master
+  ✓ README (5570 B)
+  ✓ Makefile (72332 B)
+  ✓ .gitignore (2238 B)
+  ✓ COPYING (496 B)
+  8 fichier(s) téléchargé(s)
+Dépôt cloné : https://github.com/torvalds/linux.git -> /linux
+```
+
 **Subcommandes disponibles:**
-- `clone <url> [dest]` : Crée la structure du dépôt dans le FS
+- `clone <url> [dest]` : Clone un repo GitHub (télécharge vraiment les fichiers!)
 - `add <pattern>` : Enregistre les fichiers à stagier (simul)
 - `commit -m <msg>` : Crée un commit avec hash pseudo-aléatoire
 - `log [n]` : Affiche l'historique des commits
@@ -258,7 +278,8 @@ csfs/
 - Structures `GitRepository` et `GitManager` définies dans `include/git.h`
 - Implémentation en `git_manager_create()` / `git_manager_destroy()`
 - Handlers de commandes intégrés à `cmd_git()` dans `shell.c`
-- Pas de dépendances externes (pas de libgit2)
+- Utilise curl pour téléchargement réseau (pas de libgit2)
+- Support GitHub avec détection intelligente de branche
 
 ### Limitations actuelles
 
@@ -266,8 +287,8 @@ csfs/
 - **Pas de fragmentation** : les données sont stockées séquentiellement
 - **Pas de permissions** : pas de gestion d'utilisateurs/groupes
 - **Suppression simple** : l'espace n'est pas récupéré (marquage comme libre uniquement)
-- **Git simulé** : Pas d'accès réseau, pas de vrai cloning, pas de merge
-- **Stockage Git simple** : Pas de vrai système d'objets Git
+- **Stockage Git simple** : Pas de vrai système d'objets Git (commits/branches sont simulés)
+- **GitHub limité** : Clone télécharge seulement les fichiers clés du repo (pas d'archive complète)
 
 ## 🔮 Possibilités futures
 
