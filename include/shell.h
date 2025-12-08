@@ -2,11 +2,13 @@
 #define SHELL_H
 
 #include "fs.h"
+#include "git.h"
 
 typedef struct {
     FileSystem *fs;
     char current_path[MAX_PATH];
     int running;
+    GitManager *git_manager;        // Git support
 } Shell;
 
 Shell *shell_create(FileSystem *fs);

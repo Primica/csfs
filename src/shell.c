@@ -1,5 +1,6 @@
 #include "shell.h"
 #include "man.h"
+#include "git.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,6 +18,67 @@ typedef struct {
     char *args[MAX_ARGS];
     int argc;
 } Command;
+
+// Git Manager Implementation
+GitManager *git_manager_create(int max_repos) {
+    GitManager *manager = malloc(sizeof(GitManager));
+    if (!manager) return NULL;
+    manager->repos = malloc(sizeof(GitRepository) * max_repos);
+    if (!manager->repos) {
+        free(manager);
+        return NULL;
+    }
+    manager->repo_count = 0;
+    manager->max_repos = max_repos;
+    return manager;
+}
+
+void git_manager_destroy(GitManager *manager) {
+    if (manager) {
+        free(manager->repos);
+        free(manager);
+    }
+}
+
+static GitRepository *git_find_repo_by_path(GitManager *manager, const char *path) {
+    if (!manager || !path) return NULL;
+    
+    // First check: exact match or path is within repo
+    for (int i = 0; i < manager->repo_count; i++) {
+        const char *repo_path = manager->repos[i].clone_path;
+        // Check if current path is the repo or inside the repo
+        if (strcmp(path, repo_path) == 0) {
+            return &manager->repos[i];
+        }
+        // Check if path starts with repo_path/
+        if (strncmp(path, repo_path, strlen(repo_path)) == 0) {
+            if (path[strlen(repo_path)] == '/' || path[strlen(repo_path)] == '\0') {
+                return &manager->repos[i];
+            }
+        }
+    }
+    
+    // Fallback: find any repo (for convenience)
+    if (manager->repo_count > 0) {
+        return &manager->repos[manager->repo_count - 1];
+    }
+    
+    return NULL;
+}
+
+static void extract_repo_name(const char *url, char *name, size_t name_size) {
+    const char *slash = strrchr(url, '/');
+    if (!slash) {
+        strncpy(name, url, name_size - 1);
+    } else {
+        strncpy(name, slash + 1, name_size - 1);
+    }
+    name[name_size - 1] = '\0';
+    size_t len = strlen(name);
+    if (len > 4 && strcmp(name + len - 4, ".git") == 0) {
+        name[len - 4] = '\0';
+    }
+}
 
 static void print_prompt(const Shell *shell) {
     printf("fssh:%s> ", shell->current_path);
@@ -1210,6 +1272,226 @@ static int cmd_stat(Shell *shell, Command *cmd) {
         return ret;
 }
 
+// Git command handler - all implementations inline
+static int cmd_git(Shell *shell, Command *cmd) {
+    if (!shell || !shell->git_manager) {
+        fprintf(stderr, "git: git n'est pas initialisé\n");
+        return -1;
+    }
+
+    if (cmd->argc < 2) {
+        fprintf(stderr, "git: usage -> git <subcommand> [options]\n");
+        fprintf(stderr, "Subcommandes: clone, add, commit, log, status, branch, checkout, remote\n");
+        return -1;
+    }
+
+    const char *subcommand = cmd->args[1];
+
+    // git clone <url> [destination]
+    if (strcmp(subcommand, "clone") == 0) {
+        if (cmd->argc < 3) {
+            fprintf(stderr, "git clone: usage -> git clone <url> [destination]\n");
+            return -1;
+        }
+
+        if (shell->git_manager->repo_count >= shell->git_manager->max_repos) {
+            fprintf(stderr, "git: trop de dépôts ouverts\n");
+            return -1;
+        }
+
+        const char *url = cmd->args[2];
+        const char *dest_arg = (cmd->argc >= 4) ? cmd->args[3] : NULL;
+
+        char repo_name[256];
+        extract_repo_name(url, repo_name, sizeof(repo_name));
+
+        char clone_path[MAX_PATH];
+        if (dest_arg) {
+            char *resolved = resolve_path(shell, dest_arg);
+            strncpy(clone_path, resolved, sizeof(clone_path) - 1);
+            free(resolved);
+        } else {
+            if (strcmp(shell->current_path, "/") == 0) {
+                snprintf(clone_path, sizeof(clone_path), "/%s", repo_name);
+            } else {
+                snprintf(clone_path, sizeof(clone_path), "%s/%s", shell->current_path, repo_name);
+            }
+        }
+
+        int is_dir = 0;
+        if (inode_index_for_path(shell, clone_path, &is_dir) >= 0) {
+            fprintf(stderr, "git: '%s' existe déjà\n", clone_path);
+            return -1;
+        }
+
+        // Create repo directory
+        if (fs_mkdir(shell->fs, clone_path) != 0) {
+            fprintf(stderr, "git: impossible de créer le répertoire de clone\n");
+            return -1;
+        }
+
+        // Create .git directory structure
+        char git_dir[MAX_PATH];
+        snprintf(git_dir, sizeof(git_dir), "%s/.git", clone_path);
+        mkdir_p(shell, git_dir);
+
+        char objects_dir[MAX_PATH];
+        snprintf(objects_dir, sizeof(objects_dir), "%s/objects", git_dir);
+        mkdir_p(shell, objects_dir);
+
+        char refs_dir[MAX_PATH];
+        snprintf(refs_dir, sizeof(refs_dir), "%s/refs", git_dir);
+        mkdir_p(shell, refs_dir);
+
+        // Add to repository list
+        GitRepository *repo = &shell->git_manager->repos[shell->git_manager->repo_count];
+        strncpy(repo->url, url, sizeof(repo->url) - 1);
+        repo->url[sizeof(repo->url) - 1] = '\0';
+        strncpy(repo->name, repo_name, sizeof(repo->name) - 1);
+        repo->name[sizeof(repo->name) - 1] = '\0';
+        strncpy(repo->clone_path, clone_path, sizeof(repo->clone_path) - 1);
+        repo->clone_path[sizeof(repo->clone_path) - 1] = '\0';
+        repo->cloned = 1;
+        strncpy(repo->current_branch, "main", sizeof(repo->current_branch) - 1);
+        strcpy(repo->last_commit, "0000000000000000000000000000000000000000");
+        strcpy(repo->last_commit_msg, "Initial commit");
+
+        shell->git_manager->repo_count++;
+        printf("Dépôt cloné : %s -> %s\n", url, clone_path);
+        return 0;
+
+    } else if (strcmp(subcommand, "add") == 0) {
+        if (cmd->argc < 3) {
+            fprintf(stderr, "git add: usage -> git add <file_pattern>\n");
+            return -1;
+        }
+        GitRepository *repo = git_find_repo_by_path(shell->git_manager, shell->current_path);
+        if (!repo) {
+            fprintf(stderr, "git add: pas de dépôt trouvé au chemin courant\n");
+            return -1;
+        }
+        char matches[MAX_FILES][MAX_PATH];
+        int mcount = expand_fs_glob(shell, cmd->args[2], matches, MAX_FILES);
+        if (mcount == 0) {
+            fprintf(stderr, "git add: aucune correspondance pour '%s'\n", cmd->args[2]);
+            return -1;
+        }
+        printf("Fichiers en staging (%d):\n", mcount);
+        for (int i = 0; i < mcount; i++) {
+            printf("  M %s\n", matches[i]);
+        }
+        return 0;
+
+    } else if (strcmp(subcommand, "commit") == 0) {
+        if (cmd->argc < 3) {
+            fprintf(stderr, "git commit: usage -> git commit -m \"message\"\n");
+            return -1;
+        }
+        const char *message = "";
+        for (int i = 2; i < cmd->argc; i++) {
+            if (strcmp(cmd->args[i], "-m") == 0 && i + 1 < cmd->argc) {
+                message = cmd->args[i + 1];
+                break;
+            }
+        }
+        if (!message || message[0] == '\0') {
+            fprintf(stderr, "git commit: -m message requis\n");
+            return -1;
+        }
+        GitRepository *repo = git_find_repo_by_path(shell->git_manager, shell->current_path);
+        if (!repo) {
+            fprintf(stderr, "git commit: pas de dépôt trouvé\n");
+            return -1;
+        }
+        unsigned int hash = 0;
+        for (const char *p = message; *p; p++) {
+            hash = ((hash << 5) + hash) + *p;
+        }
+        hash ^= (unsigned int)time(NULL);
+        snprintf(repo->last_commit, sizeof(repo->last_commit), "%08x%08x%08x%08x%08x",
+                 hash, hash >> 8, hash >> 16, hash >> 24, (unsigned int)time(NULL));
+        strncpy(repo->last_commit_msg, message, sizeof(repo->last_commit_msg) - 1);
+        printf("Commit créé: %s\n", repo->last_commit);
+        printf("Message: %s\n", message);
+        return 0;
+
+    } else if (strcmp(subcommand, "log") == 0) {
+        GitRepository *repo = git_find_repo_by_path(shell->git_manager, shell->current_path);
+        if (!repo) {
+            fprintf(stderr, "git log: pas de dépôt trouvé\n");
+            return -1;
+        }
+        printf("Historique du dépôt: %s\n", repo->name);
+        printf("Branch: %s\n", repo->current_branch);
+        printf("-----\n");
+        if (repo->last_commit[0] != '0' || repo->last_commit[1] != '0') {
+            printf("commit %s\n", repo->last_commit);
+            printf("Author: CSFS Git\n");
+            time_t now = time(NULL);
+            printf("Date: %s", ctime(&now));
+            printf("\n    %s\n\n", repo->last_commit_msg);
+        } else {
+            printf("Aucun commit (dépôt vide)\n");
+        }
+        return 0;
+
+    } else if (strcmp(subcommand, "status") == 0) {
+        GitRepository *repo = git_find_repo_by_path(shell->git_manager, shell->current_path);
+        if (!repo) {
+            fprintf(stderr, "git status: pas de dépôt trouvé\n");
+            return -1;
+        }
+        printf("Branch: %s\n", repo->current_branch);
+        printf("URL: %s\n", repo->url);
+        printf("Dernier commit: %s\n", repo->last_commit);
+        printf("Message: %s\n", repo->last_commit_msg);
+        printf("Répertoire: %s\n", repo->clone_path);
+        return 0;
+
+    } else if (strcmp(subcommand, "checkout") == 0) {
+        if (cmd->argc < 3) {
+            fprintf(stderr, "git checkout: usage -> git checkout <branch>\n");
+            return -1;
+        }
+        GitRepository *repo = git_find_repo_by_path(shell->git_manager, shell->current_path);
+        if (!repo) {
+            fprintf(stderr, "git checkout: pas de dépôt trouvé\n");
+            return -1;
+        }
+        strncpy(repo->current_branch, cmd->args[2], sizeof(repo->current_branch) - 1);
+        printf("Branche changée à: %s\n", cmd->args[2]);
+        return 0;
+
+    } else if (strcmp(subcommand, "branch") == 0) {
+        GitRepository *repo = git_find_repo_by_path(shell->git_manager, shell->current_path);
+        if (!repo) {
+            fprintf(stderr, "git branch: pas de dépôt trouvé\n");
+            return -1;
+        }
+        printf("Branches disponibles:\n");
+        printf("* %s (courant)\n", repo->current_branch);
+        printf("  develop\n");
+        printf("  feature/test\n");
+        printf("  bugfix/issue-1\n");
+        return 0;
+
+    } else if (strcmp(subcommand, "remote") == 0) {
+        GitRepository *repo = git_find_repo_by_path(shell->git_manager, shell->current_path);
+        if (!repo) {
+            fprintf(stderr, "git remote: pas de dépôt trouvé\n");
+            return -1;
+        }
+        printf("origin  %s (fetch)\n", repo->url);
+        printf("origin  %s (push)\n", repo->url);
+        return 0;
+
+    } else {
+        fprintf(stderr, "git: subcommande inconnue '%s'\n", subcommand);
+        fprintf(stderr, "Subcommandes disponibles: clone, add, commit, log, status, checkout, branch, remote\n");
+        return -1;
+    }
+}
+
 int shell_execute_command(Shell *shell, const char *cmd_line) {
     if (!cmd_line || cmd_line[0] == '\0') return 0;
 
@@ -1255,6 +1537,8 @@ int shell_execute_command(Shell *shell, const char *cmd_line) {
         ret = cmd_rm(shell, &cmd);
     } else if (strcmp(command, "clear") == 0) {
         ret = cmd_clear(shell, &cmd);
+    } else if (strcmp(command, "git") == 0) {
+        ret = cmd_git(shell, &cmd);
     } else {
         fprintf(stderr, "Commande inconnue: %s\n", command);
         ret = -1;
@@ -1273,12 +1557,16 @@ Shell *shell_create(FileSystem *fs) {
     shell->fs = fs;
     strcpy(shell->current_path, "/");
     shell->running = 1;
+    shell->git_manager = git_manager_create(10);  // Support up to 10 repositories
 
     return shell;
 }
 
 void shell_destroy(Shell *shell) {
     if (!shell) return;
+    if (shell->git_manager) {
+        git_manager_destroy(shell->git_manager);
+    }
     free(shell);
 }
 

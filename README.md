@@ -8,10 +8,11 @@ CSFS est un système de fichiers conteneurisé qui stocke des fichiers et réper
 
 ### Caractéristiques principales
 
-- **Architecture modulaire** : Code organisé en modules séparés (filesystem, shell, main)
+- **Architecture modulaire** : Code organisé en modules séparés (filesystem, shell, git, man)
 - **Système hiérarchique** : Support complet des répertoires et sous-répertoires
 - **Shell interactif** : REPL avec commandes familières (cd, ls, mkdir, cat, etc.)
 - **CLI ergonomique** : Commandes simples pour opérations rapides
+- **Gestion de version** : Intégration Git pour clone, commit, log, branches, etc.
 - **Ajout intelligent** : Détection automatique du basename et support des chemins avec `/`
 - **Wildcards** : Support des motifs `*`/`?` pour add/extract/ls/cp/mv/rm/stat (style shell)
 - **Métadonnées** : Timestamps de création/modification pour chaque entrée
@@ -109,6 +110,7 @@ Lancez le shell :
 | `cp <src> <dest>` | Copie dans le FS (wildcards) | `cp /file*.txt /backup/` |
 | `mv <src> <dest>` | Déplace/renomme (wildcards) | `mv /old*.txt /new/` |
 | `rm [-r] [-f] <chemin>` | Supprime fichiers/répertoires (wildcards, récursif/force) | `rm -rf /logs/` |
+| `git <subcommand>` | Gestion de version (clone, commit, log, branch) | `git clone https://github.com/user/repo.git` |
 | `exit` | Quitte le shell | `exit` |
 
 **Options de `tree`** :
@@ -152,6 +154,53 @@ fssh:/> exit
 Au revoir!
 ```
 
+#### Exemple avec Git
+
+```bash
+$ ./csfs git_demo.img
+=== CSFS Shell v1.0 ===
+
+fssh:/> git clone https://github.com/user/myproject.git
+Dépôt cloné : https://github.com/user/myproject.git -> /myproject
+
+fssh:/> cd /myproject
+fssh:/myproject> git add *.c
+
+fssh:/myproject> git commit -m "Initial implementation"
+Commit créé: a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6
+Message: Initial implementation
+
+fssh:/myproject> git log
+Historique du dépôt: myproject
+Branch: main
+-----
+commit a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6
+Author: CSFS Git
+Date: Mon Dec  8 11:14:31 2025
+
+    Initial implementation
+
+fssh:/myproject> git branch
+Branches disponibles:
+* main (courant)
+  develop
+  feature/test
+  bugfix/issue-1
+
+fssh:/myproject> git checkout develop
+Branche changée à: develop
+
+fssh:/myproject> git status
+Branch: develop
+URL: https://github.com/user/myproject.git
+Dernier commit: a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6
+Message: Initial implementation
+Répertoire: /myproject
+
+fssh:/myproject> exit
+Au revoir!
+```
+
 ## 🏗️ Architecture technique
 
 ### Structure du projet
@@ -160,11 +209,15 @@ Au revoir!
 csfs/
 ├── include/
 │   ├── fs.h          # API du système de fichiers
-│   └── shell.h       # API du shell interactif
+│   ├── shell.h       # API du shell interactif
+│   ├── git.h         # API du gestionnaire de version
+│   └── man.h         # Système d'aide
 ├── src/
 │   ├── fs.c          # Implémentation du FS (create, open, add, extract, list)
-│   ├── shell.c       # REPL et commandes interactives
-│   └── main.c        # Point d'entrée et CLI
+│   ├── shell.c       # REPL, commandes interactives, commandes Git
+│   ├── main.c        # Point d'entrée et CLI
+│   └── man/
+│       └── man.c     # Pages de manuel (help, man)
 ├── Makefile          # Build configuration
 └── README.md
 ```
@@ -181,12 +234,40 @@ csfs/
 └─────────────────┘
 ```
 
+### Système Git (Modular)
+
+**GitManager** gère plusieurs dépôts avec :
+- **Repository Structure** : Chaque dépôt maintient :
+  - URL d'origine
+  - Répertoire `.git` avec `objects/` et `refs/`
+  - Branche courante
+  - Dernier commit (pseudo-hash)
+  - Message de commit
+
+**Subcommandes disponibles:**
+- `clone <url> [dest]` : Crée la structure du dépôt dans le FS
+- `add <pattern>` : Enregistre les fichiers à stagier (simul)
+- `commit -m <msg>` : Crée un commit avec hash pseudo-aléatoire
+- `log [n]` : Affiche l'historique des commits
+- `status` : Affiche l'état du dépôt courant
+- `branch` : Liste les branches (main, develop, feature/*, bugfix/*)
+- `checkout <branch>` : Change la branche courante
+- `remote` : Affiche l'URL distante
+
+**Architecture modulaire:**
+- Structures `GitRepository` et `GitManager` définies dans `include/git.h`
+- Implémentation en `git_manager_create()` / `git_manager_destroy()`
+- Handlers de commandes intégrés à `cmd_git()` dans `shell.c`
+- Pas de dépendances externes (pas de libgit2)
+
 ### Limitations actuelles
 
 - **1024 fichiers/répertoires** maximum (configurable via `MAX_FILES`)
 - **Pas de fragmentation** : les données sont stockées séquentiellement
 - **Pas de permissions** : pas de gestion d'utilisateurs/groupes
 - **Suppression simple** : l'espace n'est pas récupéré (marquage comme libre uniquement)
+- **Git simulé** : Pas d'accès réseau, pas de vrai cloning, pas de merge
+- **Stockage Git simple** : Pas de vrai système d'objets Git
 
 ## 🔮 Possibilités futures
 

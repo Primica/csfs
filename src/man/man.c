@@ -274,6 +274,36 @@ static const ManPage man_pages[] = {
         .see_also = "help"
     },
     {
+        .name = "git",
+        .synopsis = "git <subcommand> [options]",
+        .description =
+            "Gestionnaire de version décentralisé dans le système de fichiers.\n"
+            "\n"
+            "Permet de gérer des dépôts Git, de créer des commits et de\n"
+            "parcourir l'historique directement dans le CSFS. Utile pour\n"
+            "les projets multi-fichiers avec suivi de version.",
+        .options =
+            "Subcommandes:\n"
+            "  clone <url> [dest]      Cloner un dépôt\n"
+            "  add <pattern>           Ajouter des fichiers au staging\n"
+            "  commit -m \"msg\"        Créer un commit\n"
+            "  log [n]                 Afficher l'historique\n"
+            "  status                  État du dépôt\n"
+            "  branch                  Lister les branches\n"
+            "  checkout <branch>       Changer de branche\n"
+            "  remote                  Afficher les dépôts distants",
+        .examples =
+            "git clone https://github.com/user/repo.git\n"
+            "git add *.txt\n"
+            "git commit -m \"Initial commit\"\n"
+            "git log\n"
+            "git status\n"
+            "git branch\n"
+            "git checkout develop\n"
+            "git remote",
+        .see_also = "add, extract, cat"
+    },
+    {
         .name = "exit",
         .synopsis = "exit",
         .description =
