@@ -19,7 +19,6 @@ typedef struct {
     int argc;
 } Command;
 
-// Forward declarations
 static int mkdir_p(Shell *shell, const char *path);
 
 static void print_prompt(const Shell *shell) {
