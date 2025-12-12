@@ -3,8 +3,5 @@ csfs
 .vscode/
 *.o
 *.img
-test.txt
-extracted.txt
-debug
-debug.c
+*.dat
 .DS_Store
