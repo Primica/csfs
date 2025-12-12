@@ -1,5 +1,5 @@
-#include "fs.h"
-#include "shell.h"
+#include "../include/fs.h"
+#include "../include/shell.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -39,7 +39,6 @@ static void build_dest_path(const char *maybe_fs_path, const char *src, char *ou
 
     size_t len = strlen(out);
     if (len == 0 || out[0] != '/') {
-        // Force absolute path from root
         char tmp[MAX_PATH];
         snprintf(tmp, sizeof(tmp), "/%s", out);
         strncpy(out, tmp, out_size - 1);
@@ -60,7 +59,6 @@ int main(int argc, char *argv[]) {
 
     const char *container = argv[1];
 
-    // If only container specified or "shell" is specified, open interactive shell
     if (argc == 2 || (argc == 3 && strcmp(argv[2], "shell") == 0)) {
         FileSystem *fs = fs_open(container);
         if (!fs) return EXIT_FAILURE;
@@ -78,7 +76,6 @@ int main(int argc, char *argv[]) {
         return EXIT_SUCCESS;
     }
 
-    // Command-line mode
     const char *cmd = argv[2];
 
     if (strcmp(cmd, "create") == 0) {

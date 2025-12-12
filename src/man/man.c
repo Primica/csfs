@@ -1,13 +1,12 @@
-#include "man.h"
+#include "../../include/man.h"
 #include <stdio.h>
 #include <string.h>
 
-// Man page definitions
 static const ManPage man_pages[] = {
     {
         .name = "cd",
         .synopsis = "cd <chemin>",
-        .description = 
+        .description =
             "Change le répertoire courant du shell.\n"
             "\n"
             "Le chemin peut être absolu (commençant par /) ou relatif.\n"
@@ -332,7 +331,7 @@ const ManPage *man_get_page(const char *command) {
 
 void man_display(const char *command) {
     const ManPage *page = man_get_page(command);
-    
+
     if (!page) {
         printf("Aucune page de manuel pour '%s'\n", command);
         printf("Essayez 'man --list' pour voir toutes les pages disponibles.\n");
@@ -341,15 +340,15 @@ void man_display(const char *command) {
 
     // Header
     printf("\n");
-    printf("\033[1m%s\033[0m(%d)                  CSFS Shell Manual                  \033[1m%s\033[0m(%d)\n", 
+    printf("\033[1m%s\033[0m(%d)                  CSFS Shell Manual                  \033[1m%s\033[0m(%d)\n",
            page->name, 1, page->name, 1);
     printf("\n");
 
     // NAME section
     printf("\033[1mNOM\033[0m\n");
-    printf("       %s - %s\n", page->name, 
-           page->description ? (strchr(page->description, '\n') ? 
-           strndup(page->description, strchr(page->description, '\n') - page->description) : 
+    printf("       %s - %s\n", page->name,
+           page->description ? (strchr(page->description, '\n') ?
+           strndup(page->description, strchr(page->description, '\n') - page->description) :
            page->description) : "commande du shell");
     printf("\n");
 
@@ -423,8 +422,7 @@ void man_list_all(void) {
     printf("\nPages de manuel disponibles:\n\n");
     for (int i = 0; i < num_pages; i++) {
         printf("  \033[1m%-12s\033[0m - ", man_pages[i].name);
-        
-        // Extract first line of description
+
         const char *desc = man_pages[i].description;
         if (desc) {
             const char *newline = strchr(desc, '\n');

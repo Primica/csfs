@@ -1,4 +1,4 @@
-#include "fs.h"
+#include "../include/fs.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,13 +12,11 @@ static char *normalize_path(const char *path) {
     strncpy(normalized, path, MAX_PATH - 1);
     normalized[MAX_PATH - 1] = '\0';
 
-    // Remove trailing slash unless it's root
     size_t len = strlen(normalized);
     if (len > 1 && normalized[len - 1] == '/') {
         normalized[len - 1] = '\0';
     }
 
-    // Ensure it starts with /
     if (normalized[0] != '/') {
         char temp[MAX_PATH];
         snprintf(temp, MAX_PATH, "/%s", normalized);
@@ -31,10 +29,8 @@ static char *normalize_path(const char *path) {
 static void extract_filename(const char *path, char *name, size_t size) {
     const char *slash = strrchr(path, '/');
     if (!slash || slash[1] == '\0') {
-        // No slash, or trailing slash
         strncpy(name, path, size - 1);
     } else {
-        // Copy from after the slash
         strncpy(name, slash + 1, size - 1);
     }
     name[size - 1] = '\0';
@@ -45,13 +41,10 @@ static void extract_parent_path(const char *path, char *parent, size_t size) {
     const char *last_slash = strrchr(normalized, '/');
 
     if (!last_slash) {
-        // No slash found, parent is root
         strncpy(parent, "/", size - 1);
     } else if (last_slash == normalized) {
-        // Slash is at the beginning (e.g., "/docs")
         strncpy(parent, "/", size - 1);
     } else {
-        // Copy up to the last slash
         size_t len = last_slash - normalized;
         strncpy(parent, normalized, len);
         parent[len] = '\0';
@@ -194,14 +187,12 @@ int fs_mkdir(FileSystem *fs, const char *path) {
     extract_parent_path(normalized, parent_path, MAX_PATH);
     extract_filename(normalized, dirname, MAX_FILENAME);
 
-    // Check if directory already exists
     if (path_exists(fs, normalized, NULL) >= 0) {
         fprintf(stderr, "Erreur : '%s' existe déjà\n", normalized);
         free(normalized);
         return -1;
     }
 
-    // Check if parent exists
     if (!parent_exists(fs, parent_path)) {
         fprintf(stderr, "Erreur : le répertoire parent '%s' n'existe pas\n", parent_path);
         free(normalized);
@@ -251,7 +242,6 @@ int fs_add_file(FileSystem *fs, const char *fs_path, const char *source_path) {
     extract_parent_path(normalized, parent_path, MAX_PATH);
     extract_filename(normalized, filename, MAX_FILENAME);
 
-    // Check if file already exists
     if (path_exists(fs, normalized, NULL) >= 0) {
         fprintf(stderr, "Erreur : '%s' existe déjà\n", normalized);
         fclose(src);
@@ -259,7 +249,6 @@ int fs_add_file(FileSystem *fs, const char *fs_path, const char *source_path) {
         return -1;
     }
 
-    // Check if parent directory exists
     if (!parent_exists(fs, parent_path)) {
         fprintf(stderr, "Erreur : le répertoire parent '%s' n'existe pas\n", parent_path);
         fclose(src);
@@ -357,7 +346,6 @@ int fs_copy_file(FileSystem *fs, const char *src_path, const char *dest_path) {
     char *normalized_src = normalize_path(src_path);
     char *normalized_dest = normalize_path(dest_path);
 
-    // Find source file
     int src_idx = -1;
     for (int i = 0; i < MAX_FILES; i++) {
         if (fs->inodes[i].filename[0] != '\0') {
@@ -389,7 +377,6 @@ int fs_copy_file(FileSystem *fs, const char *src_path, const char *dest_path) {
         return -1;
     }
 
-    // Check if destination already exists
     if (path_exists(fs, normalized_dest, NULL) >= 0) {
         fprintf(stderr, "Erreur : '%s' existe déjà\n", normalized_dest);
         free(normalized_src);
@@ -397,13 +384,11 @@ int fs_copy_file(FileSystem *fs, const char *src_path, const char *dest_path) {
         return -1;
     }
 
-    // Extract parent and filename from destination
     char parent_path[MAX_PATH];
     char filename[MAX_FILENAME];
     extract_parent_path(normalized_dest, parent_path, MAX_PATH);
     extract_filename(normalized_dest, filename, MAX_FILENAME);
 
-    // Check if parent directory exists
     if (!parent_exists(fs, parent_path)) {
         fprintf(stderr, "Erreur : le répertoire parent '%s' n'existe pas\n", parent_path);
         free(normalized_src);
@@ -411,7 +396,6 @@ int fs_copy_file(FileSystem *fs, const char *src_path, const char *dest_path) {
         return -1;
     }
 
-    // Find free inode
     int dest_idx = find_free_inode(fs);
     if (dest_idx == -1) {
         fprintf(stderr, "Erreur : pas d'inode disponible\n");
@@ -420,7 +404,6 @@ int fs_copy_file(FileSystem *fs, const char *src_path, const char *dest_path) {
         return -1;
     }
 
-    // Copy file data
     uint64_t offset = find_data_end(fs);
     Inode *src_inode = &fs->inodes[src_idx];
 
@@ -440,7 +423,6 @@ int fs_copy_file(FileSystem *fs, const char *src_path, const char *dest_path) {
         remaining -= bytes_read;
     }
 
-    // Create destination inode
     strncpy(fs->inodes[dest_idx].filename, filename, MAX_FILENAME - 1);
     fs->inodes[dest_idx].filename[MAX_FILENAME - 1] = '\0';
     strncpy(fs->inodes[dest_idx].parent_path, parent_path, MAX_PATH - 1);
@@ -453,7 +435,7 @@ int fs_copy_file(FileSystem *fs, const char *src_path, const char *dest_path) {
 
     fs->sb.num_files++;
 
-    printf("Fichier copié : %s -> %s (%lu octets)\n", normalized_src, normalized_dest, 
+    printf("Fichier copié : %s -> %s (%lu octets)\n", normalized_src, normalized_dest,
            (unsigned long)src_inode->size);
     free(normalized_src);
     free(normalized_dest);
@@ -469,7 +451,6 @@ int fs_move_file(FileSystem *fs, const char *src_path, const char *dest_path) {
     char *normalized_src = normalize_path(src_path);
     char *normalized_dest = normalize_path(dest_path);
 
-    // Find source file
     int src_idx = -1;
     for (int i = 0; i < MAX_FILES; i++) {
         if (fs->inodes[i].filename[0] != '\0') {
@@ -494,7 +475,6 @@ int fs_move_file(FileSystem *fs, const char *src_path, const char *dest_path) {
         return -1;
     }
 
-    // Check if destination already exists
     if (path_exists(fs, normalized_dest, NULL) >= 0) {
         fprintf(stderr, "Erreur : '%s' existe déjà\n", normalized_dest);
         free(normalized_src);
@@ -502,13 +482,11 @@ int fs_move_file(FileSystem *fs, const char *src_path, const char *dest_path) {
         return -1;
     }
 
-    // Extract parent and filename from destination
     char parent_path[MAX_PATH];
     char filename[MAX_FILENAME];
     extract_parent_path(normalized_dest, parent_path, MAX_PATH);
     extract_filename(normalized_dest, filename, MAX_FILENAME);
 
-    // Check if parent directory exists
     if (!parent_exists(fs, parent_path)) {
         fprintf(stderr, "Erreur : le répertoire parent '%s' n'existe pas\n", parent_path);
         free(normalized_src);
@@ -516,7 +494,6 @@ int fs_move_file(FileSystem *fs, const char *src_path, const char *dest_path) {
         return -1;
     }
 
-    // For files: update inode in place
     if (!fs->inodes[src_idx].is_directory) {
         strncpy(fs->inodes[src_idx].filename, filename, MAX_FILENAME - 1);
         fs->inodes[src_idx].filename[MAX_FILENAME - 1] = '\0';
@@ -526,20 +503,16 @@ int fs_move_file(FileSystem *fs, const char *src_path, const char *dest_path) {
 
         printf("Déplacé : %s -> %s\n", normalized_src, normalized_dest);
     } else {
-        // For directories: update and cascade rename children
         strncpy(fs->inodes[src_idx].filename, filename, MAX_FILENAME - 1);
         fs->inodes[src_idx].filename[MAX_FILENAME - 1] = '\0';
         strncpy(fs->inodes[src_idx].parent_path, parent_path, MAX_PATH - 1);
         fs->inodes[src_idx].parent_path[MAX_PATH - 1] = '\0';
         fs->inodes[src_idx].modified = time(NULL);
 
-        // Cascade update all children
         for (int i = 0; i < MAX_FILES; i++) {
             if (fs->inodes[i].filename[0] != '\0' && i != src_idx) {
-                // Check if this entry is under the old directory path
                 if (strncmp(fs->inodes[i].parent_path, normalized_src,
                            strlen(normalized_src)) == 0) {
-                    // Rebuild parent path with new directory location
                     char old_parent[MAX_PATH];
                     strncpy(old_parent, fs->inodes[i].parent_path, MAX_PATH - 1);
 
@@ -569,7 +542,6 @@ void fs_list(FileSystem *fs, const char *path) {
 void fs_list_recursive(FileSystem *fs, const char *path, int depth) {
     char *normalized = normalize_path(path);
 
-    // Verify path exists and is a directory
     int idx = path_exists(fs, normalized, NULL);
     if (idx != -1 && !fs->inodes[idx].is_directory) {
         fprintf(stderr, "Erreur : '%s' n'est pas un répertoire\n", normalized);
@@ -584,7 +556,6 @@ void fs_list_recursive(FileSystem *fs, const char *path, int depth) {
         printf("---------------------------------------------------------------------\n");
     }
 
-    // List entries in this directory
     for (int i = 0; i < MAX_FILES; i++) {
         if (fs->inodes[i].filename[0] != '\0' &&
             strcmp(fs->inodes[i].parent_path, normalized) == 0) {

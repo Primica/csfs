@@ -1,5 +1,6 @@
-#include "shell.h"
-#include "man.h"
+#include "../include/fs.h"
+#include "../include/man.h"
+#include "../include/shell.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -56,10 +57,8 @@ static char *resolve_path(const Shell *shell, const char *arg_path) {
     char *result = malloc(MAX_PATH);
 
     if (strcmp(arg_path, ".") == 0) {
-        // Current directory
         strncpy(result, shell->current_path, MAX_PATH - 1);
     } else if (strcmp(arg_path, "..") == 0) {
-        // Parent directory
         if (strcmp(shell->current_path, "/") == 0) {
             strncpy(result, "/", MAX_PATH - 1);
         } else {
@@ -67,7 +66,6 @@ static char *resolve_path(const Shell *shell, const char *arg_path) {
             strncpy(temp, shell->current_path, MAX_PATH - 1);
             char *last_slash = strrchr(temp, '/');
             if (last_slash == temp) {
-                // Parent is root
                 strncpy(result, "/", MAX_PATH - 1);
             } else {
                 *last_slash = '\0';
@@ -75,13 +73,10 @@ static char *resolve_path(const Shell *shell, const char *arg_path) {
             }
         }
     } else if (arg_path[0] == '/') {
-        // Absolute path
         strncpy(result, arg_path, MAX_PATH - 1);
     } else if (strcmp(shell->current_path, "/") == 0) {
-        // Relative path from root
         snprintf(result, MAX_PATH, "/%s", arg_path);
     } else {
-        // Relative path from non-root
         snprintf(result, MAX_PATH, "%s/%s", shell->current_path, arg_path);
     }
 
@@ -89,7 +84,6 @@ static char *resolve_path(const Shell *shell, const char *arg_path) {
     return result;
 }
 
-// Construit le chemin absolu complet pour une entrée inode
 static void build_full_path_from_inode(const Inode *inode, char *out, size_t size) {
     if (strcmp(inode->parent_path, "/") == 0) {
         snprintf(out, size, "/%s", inode->filename);
@@ -99,11 +93,10 @@ static void build_full_path_from_inode(const Inode *inode, char *out, size_t siz
     out[size - 1] = '\0';
 }
 
-// Recherche l'index d'inode pour un chemin absolu ; retourne -1 si introuvable
 static int inode_index_for_path(Shell *shell, const char *path, int *is_dir_out) {
     if (strcmp(path, "/") == 0) {
         if (is_dir_out) *is_dir_out = 1;
-        return -1; // racine virtuelle
+        return -1;
     }
 
     for (int i = 0; i < MAX_FILES; i++) {
@@ -120,12 +113,10 @@ static int inode_index_for_path(Shell *shell, const char *path, int *is_dir_out)
     return -1;
 }
 
-// Match simple avec wildcards '*' (toute séquence) et '?' (un caractère)
 static int wildcard_match(const char *pattern, const char *str) {
     if (*pattern == '\0') return *str == '\0';
 
     if (*pattern == '*') {
-        // Consomme zéro ou plusieurs caractères
         return wildcard_match(pattern + 1, str) || (*str && wildcard_match(pattern, str + 1));
     }
 
@@ -140,13 +131,11 @@ static int wildcard_match(const char *pattern, const char *str) {
     return 0;
 }
 
-// Normalise un chemin en supprimant un slash final (sauf racine)
 static void strip_trailing_slash(char *path) {
     size_t len = strlen(path);
     if (len > 1 && path[len - 1] == '/') path[len - 1] = '\0';
 }
 
-// Retourne vrai si le chemin absolu est un répertoire dans le FS (racine incluse)
 static int fs_path_is_dir(Shell *shell, const char *abs_path) {
     if (strcmp(abs_path, "/") == 0) return 1;
     int is_dir = 0;
@@ -158,7 +147,6 @@ static int has_glob(const char *s) {
     return strpbrk(s, "*?") != NULL;
 }
 
-// Suppression d'un chemin (fichier ou répertoire) avec options récursif/force
 static int delete_path(Shell *sh, const char *abs_path, int recursive, int force) {
     if (strcmp(abs_path, "/") == 0) {
         fprintf(stderr, "rm: refus de supprimer la racine\n");
@@ -205,7 +193,6 @@ static int delete_path(Shell *sh, const char *abs_path, int recursive, int force
     return 0;
 }
 
-// Expansion des wildcards sur chemins FS (absolus ou relatifs au cwd)
 static int expand_fs_glob(Shell *shell, const char *input, char results[][MAX_PATH], int max_results) {
     char pattern[MAX_PATH];
 
@@ -236,7 +223,6 @@ static int expand_fs_glob(Shell *shell, const char *input, char results[][MAX_PA
         }
     }
 
-    // Support de la racine quand pattern correspond exactement à "/" ou "/*"
     if ((strcmp(pattern, "/") == 0 || strcmp(pattern, "/*") == 0) && count < max_results) {
         strncpy(results[count], "/", MAX_PATH - 1);
         results[count][MAX_PATH - 1] = '\0';
@@ -294,7 +280,6 @@ static int cmd_man(Shell *shell, Command *cmd) {
 static int cmd_clear(Shell *shell, Command *cmd) {
     (void)shell;
     (void)cmd;
-    // ANSI escape sequence pour effacer l'écran et repositionner le curseur
     printf("\033[2J\033[H");
     fflush(stdout);
     return 0;
@@ -342,7 +327,6 @@ static int cmd_cd(Shell *shell, Command *cmd) {
     if (strcmp(resolved, "/") == 0) {
         is_dir = 1;
     } else {
-        // Check if path exists and is a directory
         for (int i = 0; i < MAX_FILES; i++) {
             if (shell->fs->inodes[i].filename[0] != '\0') {
                 char full_path[MAX_PATH];
@@ -401,38 +385,31 @@ static void basename_from_path(const char *path, char *out, size_t out_size) {
     out[out_size - 1] = '\0';
 }
 
-// Créer un répertoire avec tous ses parents
 static int mkdir_p(Shell *shell, const char *path) {
     if (!path || *path == '\0' || strcmp(path, "/") == 0) return 0;
-    
-    // Vérifier si existe déjà
+
     if (fs_path_is_dir(shell, path)) return 0;
-    
+
     char temp[MAX_PATH];
     strncpy(temp, path, sizeof(temp) - 1);
     temp[sizeof(temp) - 1] = '\0';
-    
-    // Supprimer le trailing slash
+
     size_t len = strlen(temp);
     if (len > 1 && temp[len - 1] == '/') {
         temp[len - 1] = '\0';
     }
-    
-    // Trouver le dernier /
+
     char *slash = strrchr(temp, '/');
     if (slash && slash != temp) {
         *slash = '\0';
-        // Créer récursivement le parent
         mkdir_p(shell, temp);
         *slash = '/';
     }
-    
-    // Créer ce répertoire
+
     fs_mkdir(shell->fs, path);
     return 0;
 }
 
-// Contexte global pour ftw callback dans add récursif
 static Shell *g_add_shell = NULL;
 static char g_add_base_src[MAX_PATH] = "";
 static char g_add_base_dest[MAX_PATH] = "";
@@ -442,10 +419,9 @@ static int add_recursive_callback(const char *fpath, const struct stat *sb, int 
     (void)sb;
     (void)ftwbuf;
     if (typeflag == FTW_D || typeflag == FTW_DNR) {
-        // Répertoire
         const char *rel = fpath + strlen(g_add_base_src);
         if (*rel == '/') rel++;
-        if (*rel == '\0') return 0; // racine de la source
+        if (*rel == '\0') return 0;
 
         char dest_dir[MAX_PATH];
         if (strcmp(g_add_base_dest, "/") == 0) {
@@ -456,7 +432,6 @@ static int add_recursive_callback(const char *fpath, const struct stat *sb, int 
         mkdir_p(g_add_shell, dest_dir);
         return 0;
     } else if (typeflag == FTW_F) {
-        // Fichier
         const char *rel = fpath + strlen(g_add_base_src);
         if (*rel == '/') rel++;
 
@@ -479,7 +454,6 @@ static int cmd_add(Shell *shell, Command *cmd) {
     int recursive = 0;
     int first_arg = 1;
 
-    // Parse -r option
     for (int i = 1; i < cmd->argc; i++) {
         if (strcmp(cmd->args[i], "-r") == 0 || strcmp(cmd->args[i], "-R") == 0) {
             recursive = 1;
@@ -567,13 +541,11 @@ static int cmd_add(Shell *shell, Command *cmd) {
                 ret = -1;
                 continue;
             }
-            // Récursif
             g_add_shell = shell;
             strncpy(g_add_base_src, src_path, sizeof(g_add_base_src) - 1);
             strncpy(g_add_base_dest, dest_path, sizeof(g_add_base_dest) - 1);
             g_add_error = 0;
 
-            // Créer le répertoire racine avec parents
             mkdir_p(shell, dest_path);
 
             if (nftw(src_path, add_recursive_callback, 20, FTW_PHYS) != 0) {
@@ -642,12 +614,10 @@ static int cmd_cat(Shell *shell, Command *cmd) {
 }
 
 static void extract_recursive_dir(Shell *shell, const char *fs_path, const char *host_base, int *error) {
-    // Créer le répertoire hôte
     char mkdir_cmd[MAX_PATH * 2];
     snprintf(mkdir_cmd, sizeof(mkdir_cmd), "mkdir -p %s", host_base);
     system(mkdir_cmd);
 
-    // Parcourir les enfants
     for (int i = 0; i < MAX_FILES; i++) {
         if (shell->fs->inodes[i].filename[0] != '\0' &&
             strcmp(shell->fs->inodes[i].parent_path, fs_path) == 0) {
@@ -672,7 +642,6 @@ static int cmd_extract(Shell *shell, Command *cmd) {
     int recursive = 0;
     int first_arg = 1;
 
-    // Parse -r option
     for (int i = 1; i < cmd->argc; i++) {
         if (strcmp(cmd->args[i], "-r") == 0 || strcmp(cmd->args[i], "-R") == 0) {
             recursive = 1;
@@ -935,24 +904,21 @@ typedef struct {
     int max_depth;
 } TreeOptions;
 
-static void tree_recursive(Shell *shell, const char *path, int depth, TreeOptions *opts, 
+static void tree_recursive(Shell *shell, const char *path, int depth, TreeOptions *opts,
                           int is_last[], int parent_depth) {
     (void)parent_depth;
     if (opts->max_depth >= 0 && depth > opts->max_depth) return;
 
-    // Print entries in this directory
     for (int i = 0; i < MAX_FILES; i++) {
         if (shell->fs->inodes[i].filename[0] != '\0' &&
             strcmp(shell->fs->inodes[i].parent_path, path) == 0) {
 
             if (opts->dirs_only && !shell->fs->inodes[i].is_directory) continue;
 
-            // Print tree characters
             for (int d = 0; d < depth - 1; d++) {
                 printf("%s   ", is_last[d] ? " " : "│");
             }
             if (depth > 0) {
-                // Count remaining entries at this level
                 int remaining = 0;
                 for (int j = i + 1; j < MAX_FILES; j++) {
                     if (shell->fs->inodes[j].filename[0] != '\0' &&
@@ -966,14 +932,12 @@ static void tree_recursive(Shell *shell, const char *path, int depth, TreeOption
                 is_last[depth - 1] = (remaining == 0);
             }
 
-            // Print name
             if (shell->fs->inodes[i].is_directory) {
                 printf("\033[1;34m%s\033[0m/", shell->fs->inodes[i].filename);
             } else {
                 printf("%s", shell->fs->inodes[i].filename);
             }
 
-            // Print metadata if requested
             if (opts->show_metadata) {
                 if (!shell->fs->inodes[i].is_directory) {
                     printf(" (%lu B)", (unsigned long)shell->fs->inodes[i].size);
@@ -985,7 +949,6 @@ static void tree_recursive(Shell *shell, const char *path, int depth, TreeOption
             }
             printf("\n");
 
-            // Recurse into subdirectories
             if (shell->fs->inodes[i].is_directory) {
                 char subdir_path[MAX_PATH];
                 if (strcmp(path, "/") == 0) {
@@ -1003,7 +966,6 @@ static int cmd_tree(Shell *shell, Command *cmd) {
     TreeOptions opts = {0, 0, -1};
     const char *path = NULL;
 
-    // Parse options
     for (int i = 1; i < cmd->argc; i++) {
         if (strcmp(cmd->args[i], "-a") == 0) {
             opts.show_metadata = 1;
@@ -1028,7 +990,6 @@ static int cmd_tree(Shell *shell, Command *cmd) {
 
     char *resolved = resolve_path(shell, path);
 
-    // Check if path exists and is a directory
     int idx = -1;
     for (int i = 0; i < MAX_FILES; i++) {
         if (shell->fs->inodes[i].filename[0] != '\0') {
@@ -1052,14 +1013,11 @@ static int cmd_tree(Shell *shell, Command *cmd) {
         return -1;
     }
 
-    // Print root
     printf("\033[1;34m%s\033[0m\n", resolved);
 
-    // Tree traversal
     int is_last[256] = {0};
     tree_recursive(shell, resolved, 1, &opts, is_last, 0);
 
-    // Count stats
     int dirs = 0, files = 0;
     for (int i = 0; i < MAX_FILES; i++) {
         if (shell->fs->inodes[i].filename[0] != '\0') {
@@ -1140,7 +1098,6 @@ static int cmd_find(Shell *shell, Command *cmd) {
         return 0;
     }
 
-    // Inclure le répertoire de départ si le pattern matche (sauf racine)
     if (pattern && strcmp(start_path, "/") != 0 && name_matches(strrchr(start_path, '/') ? strrchr(start_path, '/') + 1 : start_path, pattern)) {
         printf("%s/\n", start_path);
     }
@@ -1300,7 +1257,6 @@ void shell_run(Shell *shell) {
             break;
         }
 
-        // Remove trailing newline
         size_t len = strlen(buffer);
         if (len > 0 && buffer[len - 1] == '\n') {
             buffer[len - 1] = '\0';
