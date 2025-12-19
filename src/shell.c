@@ -1,6 +1,7 @@
 #include "../include/fs.h"
 #include "../include/man.h"
 #include "../include/shell.h"
+#include "../include/fetch.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -252,6 +253,7 @@ static int cmd_help(Shell *shell, Command *cmd) {
     printf("  mv <src> <dest>   - Déplacer/renommer un fichier ou répertoire\n");
     printf("  extract <src> [dest] - Extraire un fichier\n");
     printf("  rm <chemin>       - Supprimer un fichier/répertoire\n");
+    printf("  fetch [opts]      - Afficher infos type neofetch\n");
     printf("  clear             - Effacer l'écran\n");
     printf("  exit              - Quitter le shell\n");
     printf("\nPour plus de détails: man <commande>\n");
@@ -1170,6 +1172,36 @@ static int cmd_stat(Shell *shell, Command *cmd) {
         return ret;
 }
 
+static int cmd_fetch(Shell *shell, Command *cmd) {
+    int list = 0;
+    int color = 1;
+    const char *only[32];
+    int only_count = 0;
+
+    for (int i = 1; i < cmd->argc; i++) {
+        const char *a = cmd->args[i];
+        if (strcmp(a, "--list") == 0 || strcmp(a, "-l") == 0) {
+            list = 1;
+        } else if (strcmp(a, "--no-color") == 0 || strcmp(a, "--no-colors") == 0) {
+            color = 0;
+        } else if (a[0] == '-') {
+            fprintf(stderr, "fetch: option inconnue '%s'\n", a);
+            return -1;
+        } else {
+            if (only_count < (int)(sizeof(only)/sizeof(only[0]))) {
+                only[only_count++] = a;
+            }
+        }
+    }
+
+    if (list) {
+        fetch_list_modules();
+        return 0;
+    }
+
+    return fetch_print(shell, only_count ? only : NULL, only_count, color);
+}
+
 int shell_execute_command(Shell *shell, const char *cmd_line) {
     if (!cmd_line || cmd_line[0] == '\0') return 0;
 
@@ -1205,6 +1237,8 @@ int shell_execute_command(Shell *shell, const char *cmd_line) {
         ret = cmd_cat(shell, &cmd);
     } else if (strcmp(command, "stat") == 0) {
         ret = cmd_stat(shell, &cmd);
+    } else if (strcmp(command, "fetch") == 0) {
+        ret = cmd_fetch(shell, &cmd);
     } else if (strcmp(command, "extract") == 0) {
         ret = cmd_extract(shell, &cmd);
     } else if (strcmp(command, "cp") == 0) {

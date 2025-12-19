@@ -21,6 +21,26 @@ static const ManPage man_pages[] = {
         .see_also = "pwd, ls, tree"
     },
     {
+        .name = "fetch",
+        .synopsis = "fetch [--list] [--no-color] [modules...]",
+        .description =
+            "Affiche des informations système et CSFS façon neofetch/fastfetch.\n"
+            "\n"
+            "Architecture modulaire : chaque 'module' imprime une section\n"
+            "(logo, system, fs, shell, colors). On peut sélectionner des\n"
+            "modules à imprimer ou lister ceux disponibles.",
+        .options =
+            "--list, -l       Lister les modules disponibles\n"
+            "--no-color       Désactiver les couleurs ANSI\n"
+            "modules...       Noms des modules à afficher (par défaut: tous)",
+        .examples =
+            "fetch                    Afficher toutes les sections\n"
+            "fetch --no-color         Sortie sans couleurs\n"
+            "fetch system fs          N'afficher que 'system' et 'fs'\n"
+            "fetch --list             Lister les modules",
+        .see_also = "help, man"
+    },
+    {
         .name = "ls",
         .synopsis = "ls [chemin]",
         .description =

@@ -109,6 +109,7 @@ Lancez le shell :
 | `cp <src> <dest>` | Copie dans le FS (wildcards) | `cp /file*.txt /backup/` |
 | `mv <src> <dest>` | Déplace/renomme (wildcards) | `mv /old*.txt /new/` |
 | `rm [-r] [-f] <chemin>` | Supprime fichiers/répertoires (wildcards, récursif/force) | `rm -rf /logs/` |
+| `fetch [opts] [modules]` | Affiche infos style neofetch/fastfetch | `fetch`, `fetch --list`, `fetch system fs` |
 | `exit` | Quitte le shell | `exit` |
 
 **Options de `tree`** :
@@ -148,6 +149,19 @@ fssh:/> tree -a
 │   └── mycode.c (2048 B) [2025-12-07 10:30]
 
 1 directories, 1 files
+fssh:/> fetch system fs
+Host           <hostname>
+OS             <os>
+Kernel         <version>
+Arch           <arch>
+Date           <date>
+----------------------------------------
+FS Version     1
+Inodes         1/1024
+Directories    1
+Files          1
+Data Size      2.00 KiB
+----------------------------------------
 fssh:/> exit
 Au revoir!
 ```
