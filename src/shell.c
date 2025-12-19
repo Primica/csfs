@@ -13,6 +13,7 @@
 #include <ftw.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <termios.h>
 
 #define BUFFER_SIZE 2048
 #define MAX_ARGS 32
@@ -21,6 +22,49 @@ typedef struct {
     char *args[MAX_ARGS];
     int argc;
 } Command;
+
+static void add_to_history(Shell *shell, const char *cmd) {
+    if (!cmd || cmd[0] == '\0') return;
+    
+    // Ne pas ajouter si identique à la dernière commande
+    if (shell->history_count > 0 && 
+        strcmp(shell->history[shell->history_count - 1], cmd) == 0) {
+        return;
+    }
+    
+    // Si l'historique est plein, supprimer la plus ancienne
+    if (shell->history_count >= HISTORY_SIZE) {
+        free(shell->history[0]);
+        for (int i = 0; i < HISTORY_SIZE - 1; i++) {
+            shell->history[i] = shell->history[i + 1];
+        }
+        shell->history_count--;
+    }
+    
+    shell->history[shell->history_count] = strdup(cmd);
+    shell->history_count++;
+    shell->history_pos = shell->history_count;
+}
+
+static const char *get_history(Shell *shell, int direction) {
+    if (shell->history_count == 0) return NULL;
+    
+    if (direction == -1) { // Flèche haut
+        if (shell->history_pos > 0) {
+            shell->history_pos--;
+            return shell->history[shell->history_pos];
+        }
+    } else if (direction == 1) { // Flèche bas
+        if (shell->history_pos < shell->history_count - 1) {
+            shell->history_pos++;
+            return shell->history[shell->history_pos];
+        } else if (shell->history_pos == shell->history_count - 1) {
+            shell->history_pos = shell->history_count;
+            return "";
+        }
+    }
+    return NULL;
+}
 
 static int mkdir_p(Shell *shell, const char *path);
 
@@ -1280,12 +1324,23 @@ Shell *shell_create(FileSystem *fs) {
     shell->fs = fs;
     strcpy(shell->current_path, "/");
     shell->running = 1;
+    shell->history_count = 0;
+    shell->history_pos = 0;
+    for (int i = 0; i < HISTORY_SIZE; i++) {
+        shell->history[i] = NULL;
+    }
 
     return shell;
 }
 
 void shell_destroy(Shell *shell) {
     if (!shell) return;
+    
+    // Libérer l'historique
+    for (int i = 0; i < shell->history_count; i++) {
+        free(shell->history[i]);
+    }
+    
     free(shell);
 }
 
@@ -1295,22 +1350,89 @@ void shell_run(Shell *shell) {
     printf("\n=== CSFS Shell v1.0 ===\n");
     printf("Tapez 'help' pour la liste des commandes\n\n");
 
+    struct termios orig_termios, raw;
+    tcgetattr(STDIN_FILENO, &orig_termios);
+    raw = orig_termios;
+    raw.c_lflag &= ~(ECHO | ICANON);
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
+
     char buffer[BUFFER_SIZE];
+    int pos = 0;
 
     while (shell->running) {
         print_prompt(shell);
+        pos = 0;
+        buffer[0] = '\0';
 
-        if (!fgets(buffer, sizeof(buffer), stdin)) {
-            break;
+        while (1) {
+            char c;
+            if (read(STDIN_FILENO, &c, 1) != 1) break;
+
+            if (c == '\x1b') { // Séquence d'échappement
+                char seq[2];
+                if (read(STDIN_FILENO, &seq[0], 1) != 1) continue;
+                if (read(STDIN_FILENO, &seq[1], 1) != 1) continue;
+
+                if (seq[0] == '[') {
+                    if (seq[1] == 'A') { // Flèche haut
+                        const char *hist = get_history(shell, -1);
+                        if (hist) {
+                            // Effacer la ligne courante
+                            while (pos > 0) {
+                                write(STDOUT_FILENO, "\b \b", 3);
+                                pos--;
+                            }
+                            strcpy(buffer, hist);
+                            pos = strlen(buffer);
+                            write(STDOUT_FILENO, buffer, pos);
+                        }
+                    } else if (seq[1] == 'B') { // Flèche bas
+                        const char *hist = get_history(shell, 1);
+                        if (hist) {
+                            // Effacer la ligne courante
+                            while (pos > 0) {
+                                write(STDOUT_FILENO, "\b \b", 3);
+                                pos--;
+                            }
+                            strcpy(buffer, hist);
+                            pos = strlen(buffer);
+                            write(STDOUT_FILENO, buffer, pos);
+                        }
+                    }
+                }
+            } else if (c == '\n') {
+                write(STDOUT_FILENO, "\n", 1);
+                buffer[pos] = '\0';
+                break;
+            } else if (c == 127 || c == '\b') { // Backspace
+                if (pos > 0) {
+                    pos--;
+                    buffer[pos] = '\0';
+                    write(STDOUT_FILENO, "\b \b", 3);
+                }
+            } else if (c == 4) { // Ctrl-D
+                if (pos == 0) {
+                    shell->running = 0;
+                    write(STDOUT_FILENO, "\n", 1);
+                    break;
+                }
+            } else if (c >= 32 && c < 127) { // Caractères imprimables
+                if (pos < BUFFER_SIZE - 1) {
+                    buffer[pos++] = c;
+                    buffer[pos] = '\0';
+                    write(STDOUT_FILENO, &c, 1);
+                }
+            }
         }
 
-        size_t len = strlen(buffer);
-        if (len > 0 && buffer[len - 1] == '\n') {
-            buffer[len - 1] = '\0';
-        }
+        if (!shell->running) break;
 
-        shell_execute_command(shell, buffer);
+        if (buffer[0] != '\0') {
+            add_to_history(shell, buffer);
+            shell_execute_command(shell, buffer);
+        }
     }
 
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
     printf("\nAu revoir!\n");
 }

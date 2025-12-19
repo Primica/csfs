@@ -3,10 +3,15 @@
 
 #include "fs.h"
 
+#define HISTORY_SIZE 100
+
 typedef struct {
     FileSystem *fs;
     char current_path[MAX_PATH];
     int running;
+    char *history[HISTORY_SIZE];
+    int history_count;
+    int history_pos;
 } Shell;
 
 Shell *shell_create(FileSystem *fs);
