@@ -2,6 +2,7 @@
 #include "../include/man.h"
 #include "../include/shell.h"
 #include "../include/fetch.h"
+#include "../include/editor.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -253,6 +254,7 @@ static int cmd_help(Shell *shell, Command *cmd) {
     printf("  mv <src> <dest>   - Déplacer/renommer un fichier ou répertoire\n");
     printf("  extract <src> [dest] - Extraire un fichier\n");
     printf("  rm <chemin>       - Supprimer un fichier/répertoire\n");
+    printf("  edit <fichier>    - Éditer un fichier (type nano)\n");
     printf("  fetch [opts]      - Afficher infos type neofetch\n");
     printf("  clear             - Effacer l'écran\n");
     printf("  exit              - Quitter le shell\n");
@@ -1202,6 +1204,15 @@ static int cmd_fetch(Shell *shell, Command *cmd) {
     return fetch_print(shell, only_count ? only : NULL, only_count, color);
 }
 
+static int cmd_edit(Shell *shell, Command *cmd) {
+    if (cmd->argc < 2) {
+        fprintf(stderr, "edit: argument requis\n");
+        return -1;
+    }
+    
+    return editor_open(shell, cmd->args[1]);
+}
+
 int shell_execute_command(Shell *shell, const char *cmd_line) {
     if (!cmd_line || cmd_line[0] == '\0') return 0;
 
@@ -1239,6 +1250,8 @@ int shell_execute_command(Shell *shell, const char *cmd_line) {
         ret = cmd_stat(shell, &cmd);
     } else if (strcmp(command, "fetch") == 0) {
         ret = cmd_fetch(shell, &cmd);
+    } else if (strcmp(command, "edit") == 0) {
+        ret = cmd_edit(shell, &cmd);
     } else if (strcmp(command, "extract") == 0) {
         ret = cmd_extract(shell, &cmd);
     } else if (strcmp(command, "cp") == 0) {

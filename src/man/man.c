@@ -41,6 +41,64 @@ static const ManPage man_pages[] = {
         .see_also = "help, man"
     },
     {
+        .name = "edit",
+        .synopsis = "edit <fichier>",
+        .description =
+            "Ouvre un éditeur de texte interactif de style Vim pour éditer un fichier.\n"
+            "\n"
+            "L'éditeur permet de créer ou modifier des fichiers directement dans\n"
+            "le système de fichiers CSFS. Il fonctionne en mode modal (normal/insert)\n"
+            "comme Vim. Si le fichier n'existe pas, il sera créé à la sauvegarde.",
+        .options =
+            "Mode NORMAL (par défaut):\n"
+            "  Navigation:\n"
+            "    h/j/k/l        Gauche/Bas/Haut/Droite\n"
+            "    0              Début de ligne\n"
+            "    $              Fin de ligne\n"
+            "    gg             Début du fichier\n"
+            "    G              Fin du fichier\n"
+            "    Flèches        Navigation alternative\n"
+            "    Page Up/Down   Navigation par page\n"
+            "\n"
+            "  Édition:\n"
+            "    i              Passer en mode INSERT\n"
+            "    I              INSERT en début de ligne\n"
+            "    a              INSERT après le curseur\n"
+            "    A              INSERT en fin de ligne\n"
+            "    o              Nouvelle ligne en dessous + INSERT\n"
+            "    O              Nouvelle ligne au dessus + INSERT\n"
+            "    x              Supprimer caractère\n"
+            "    dd             Supprimer ligne\n"
+            "\n"
+            "  Commandes:\n"
+            "    :w             Sauvegarder\n"
+            "    :q             Quitter (refuse si modifié)\n"
+            "    :q!            Forcer quitter sans sauvegarder\n"
+            "    :wq            Sauvegarder et quitter\n"
+            "    :x             Sauvegarder si modifié puis quitter\n"
+            "\n"
+            "Mode INSERT:\n"
+            "    Échap          Retour en mode NORMAL\n"
+            "    Caractères     Insertion normale\n"
+            "    Entrée         Nouvelle ligne\n"
+            "    Backspace/Del  Supprimer caractère\n"
+            "\n"
+            "Raccourcis globaux:\n"
+            "    Ctrl-S         Sauvegarder\n"
+            "    Ctrl-Q         Quitter",
+        .examples =
+            "edit notes.txt           Éditer notes.txt (démarre en mode NORMAL)\n"
+            "edit /docs/readme.md     Éditer readme.md dans /docs\n"
+            "edit newfile.c           Créer un nouveau fichier\n"
+            "\n"
+            "Dans l'éditeur:\n"
+            "  i                      Passer en mode INSERT\n"
+            "  Taper du texte         (en mode INSERT)\n"
+            "  Échap                  Retour en mode NORMAL\n"
+            "  :wq                    Sauvegarder et quitter",
+        .see_also = "cat, add, extract"
+    },
+    {
         .name = "ls",
         .synopsis = "ls [chemin]",
         .description =
