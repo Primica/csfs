@@ -74,7 +74,6 @@ static void disable_raw_mode(void) {
 
 static void enable_raw_mode(void) {
     if (tcgetattr(STDIN_FILENO, &E.orig_termios) == -1) die("tcgetattr");
-    atexit(disable_raw_mode);
 
     struct termios raw = E.orig_termios;
     raw.c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
@@ -984,6 +983,9 @@ int editor_open(Shell *shell, const char *fs_path) {
         process_keypress();
     }
 
+    // Restaurer le mode terminal avant de quitter
+    disable_raw_mode();
+    
     // Nettoyage de l'écran avant de quitter
     write(STDOUT_FILENO, "\x1b[2J", 4);
     write(STDOUT_FILENO, "\x1b[H", 3);
