@@ -5,7 +5,7 @@
 #include <stdio.h>
 #include <time.h>
 
-#define FS_MAGIC 0x46534D47
+#define FS_MAGIC 0x46534D47 // 'FSMG'
 #define MAX_FILENAME 256
 #define MAX_FILES 1024
 #define BLOCK_SIZE 4096
