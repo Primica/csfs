@@ -3,6 +3,7 @@
 #include "../include/shell.h"
 #include "../include/fetch.h"
 #include "../include/editor.h"
+#include "../include/completion.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -1415,6 +1416,13 @@ void shell_run(Shell *shell) {
                     shell->running = 0;
                     write(STDOUT_FILENO, "\n", 1);
                     break;
+                }
+            } else if (c == 9) { // Tab
+                int old_pos = pos;
+                shell_complete(shell, buffer, &pos, 0);
+                // Afficher les caractères ajoutés
+                if (pos > old_pos) {
+                    write(STDOUT_FILENO, buffer + old_pos, pos - old_pos);
                 }
             } else if (c >= 32 && c < 127) { // Caractères imprimables
                 if (pos < BUFFER_SIZE - 1) {
