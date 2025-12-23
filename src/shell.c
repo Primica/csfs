@@ -100,34 +100,102 @@ static void free_command(Command *cmd) {
     cmd->argc = 0;
 }
 
-static char *resolve_path(const Shell *shell, const char *arg_path) {
+// Normalise un chemin en supprimant les composantes . et ..
+static char *normalize_path(const char *path) {
     char *result = malloc(MAX_PATH);
-
-    if (strcmp(arg_path, ".") == 0) {
-        strncpy(result, shell->current_path, MAX_PATH - 1);
-    } else if (strcmp(arg_path, "..") == 0) {
-        if (strcmp(shell->current_path, "/") == 0) {
-            strncpy(result, "/", MAX_PATH - 1);
-        } else {
-            char temp[MAX_PATH];
-            strncpy(temp, shell->current_path, MAX_PATH - 1);
-            char *last_slash = strrchr(temp, '/');
-            if (last_slash == temp) {
-                strncpy(result, "/", MAX_PATH - 1);
-            } else {
-                *last_slash = '\0';
-                strncpy(result, temp, MAX_PATH - 1);
-            }
-        }
-    } else if (arg_path[0] == '/') {
-        strncpy(result, arg_path, MAX_PATH - 1);
-    } else if (strcmp(shell->current_path, "/") == 0) {
-        snprintf(result, MAX_PATH, "/%s", arg_path);
-    } else {
-        snprintf(result, MAX_PATH, "%s/%s", shell->current_path, arg_path);
+    if (!result) {
+        fprintf(stderr, "Erreur d'allocation de mémoire\n");
+        return NULL;
     }
 
+    char temp[MAX_PATH];
+    strncpy(temp, path, MAX_PATH - 1);
+    temp[MAX_PATH - 1] = '\0';
+
+    char *components[256];
+    int comp_count = 0;
+
+    int is_absolute = (path[0] == '/');
+    char *saveptr = NULL;
+    char *token = strtok_r(temp, "/", &saveptr);
+
+    while (token && comp_count < 256) {
+        if (strcmp(token, ".") == 0) {
+            // Rien à faire
+        } else if (strcmp(token, "..") == 0) {
+            if (comp_count > 0) {
+                free(components[comp_count - 1]);
+                comp_count--;
+            }
+        } else if (token[0] != '\0') {
+            components[comp_count] = malloc(strlen(token) + 1);
+            strcpy(components[comp_count], token);
+            comp_count++;
+        }
+        token = strtok_r(NULL, "/", &saveptr);
+    }
+
+    size_t off = 0;
+    if (is_absolute) {
+        result[0] = '/';
+        off = 1;
+        result[1] = '\0';
+    } else {
+        result[0] = '\0';
+    }
+
+    for (int i = 0; i < comp_count; i++) {
+        size_t need = strlen(components[i]) + (off > 0 && result[off - 1] != '/' ? 1 : 0);
+        if (off + need >= MAX_PATH) {
+            free(components[i]);
+            break;
+        }
+        if (off > 0 && result[off - 1] != '/') {
+            result[off++] = '/';
+            result[off] = '\0';
+        }
+        memcpy(result + off, components[i], strlen(components[i]));
+        off += strlen(components[i]);
+        result[off] = '\0';
+        free(components[i]);
+    }
+
+    if (off == 0) {
+        result[0] = '/';
+        result[1] = '\0';
+    }
+
+    size_t len = strlen(result);
+    if (len > 1 && result[len - 1] == '/') {
+        result[len - 1] = '\0';
+    }
+
+    return result;
+}
+
+static char *resolve_path(const Shell *shell, const char *arg_path) {
+    char *result = malloc(MAX_PATH);
+    char intermediate[MAX_PATH];
+    
+    // Construire un chemin absolu d'abord
+    if (arg_path[0] == '/') {
+        // Chemin absolu
+        strncpy(intermediate, arg_path, MAX_PATH - 1);
+    } else if (strcmp(shell->current_path, "/") == 0) {
+        // Chemin relatif depuis la racine
+        snprintf(intermediate, MAX_PATH, "/%s", arg_path);
+    } else {
+        // Chemin relatif depuis le répertoire courant
+        snprintf(intermediate, MAX_PATH, "%s/%s", shell->current_path, arg_path);
+    }
+    intermediate[MAX_PATH - 1] = '\0';
+    
+    // Normaliser le chemin
+    char *normalized = normalize_path(intermediate);
+    strncpy(result, normalized, MAX_PATH - 1);
     result[MAX_PATH - 1] = '\0';
+    free(normalized);
+    
     return result;
 }
 
@@ -363,12 +431,15 @@ static int cmd_ls(Shell *shell, Command *cmd) {
 }
 
 static int cmd_cd(Shell *shell, Command *cmd) {
+    char *resolved;
+    
+    // Si pas d'argument, aller à la racine (home du système)
     if (cmd->argc < 2) {
-        fprintf(stderr, "cd: argument requis\n");
-        return -1;
+        resolved = malloc(MAX_PATH);
+        strcpy(resolved, "/");
+    } else {
+        resolved = resolve_path(shell, cmd->args[1]);
     }
-
-    char *resolved = resolve_path(shell, cmd->args[1]);
 
     int is_dir = 0;
     int idx = -1;

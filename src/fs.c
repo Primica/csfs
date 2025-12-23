@@ -6,24 +6,68 @@
 #include <time.h>
 
 static char *normalize_path(const char *path) {
-    char *normalized = malloc(MAX_PATH);
-    if (!normalized) return NULL;
+    char *result = malloc(MAX_PATH);
+    if (!result) return NULL;
 
-    strncpy(normalized, path, MAX_PATH - 1);
-    normalized[MAX_PATH - 1] = '\0';
+    char temp[MAX_PATH];
+    strncpy(temp, path, MAX_PATH - 1);
+    temp[MAX_PATH - 1] = '\0';
 
-    size_t len = strlen(normalized);
-    if (len > 1 && normalized[len - 1] == '/') {
-        normalized[len - 1] = '\0';
+    char *components[256];
+    int comp_count = 0;
+
+    int is_absolute = (path[0] == '/');
+    char *saveptr = NULL;
+    char *token = strtok_r(temp, "/", &saveptr);
+
+    while (token && comp_count < 256) {
+        if (strcmp(token, ".") == 0) {
+            // Ignorer .
+        } else if (strcmp(token, "..") == 0) {
+            if (comp_count > 0) {
+                free(components[comp_count - 1]);
+                comp_count--;
+            }
+        } else if (token[0] != '\0') {
+            components[comp_count] = malloc(strlen(token) + 1);
+            strcpy(components[comp_count], token);
+            comp_count++;
+        }
+        token = strtok_r(NULL, "/", &saveptr);
     }
 
-    if (normalized[0] != '/') {
-        char temp[MAX_PATH];
-        snprintf(temp, MAX_PATH, "/%s", normalized);
-        strncpy(normalized, temp, MAX_PATH - 1);
+    size_t off = 0;
+    if (is_absolute) {
+        result[off++] = '/';
+        result[off] = '\0';
+    } else {
+        result[0] = '\0';
     }
 
-    return normalized;
+    for (int i = 0; i < comp_count; i++) {
+        size_t need = strlen(components[i]) + ((off > 0 && result[off - 1] != '/') ? 1 : 0);
+        if (off + need >= MAX_PATH) {
+            free(components[i]);
+            break;
+        }
+        if (off > 0 && result[off - 1] != '/') {
+            result[off++] = '/';
+        }
+        memcpy(result + off, components[i], strlen(components[i]));
+        off += strlen(components[i]);
+        result[off] = '\0';
+        free(components[i]);
+    }
+
+    if (off == 0) {
+        result[0] = '/';
+        result[1] = '\0';
+    }
+
+    size_t len = strlen(result);
+    if (len > 1 && result[len - 1] == '/') result[len - 1] = '\0';
+
+    return result;
 }
 
 static void extract_filename(const char *path, char *name, size_t size) {
