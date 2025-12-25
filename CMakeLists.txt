@@ -11,9 +11,9 @@ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -Wpedantic")
 # Include directories
 include_directories(include)
 
-list(APPEND CMAKE_PREFIX_PATH "/opt/homebrew/opt/raylib")
+# list(APPEND CMAKE_PREFIX_PATH "/opt/homebrew/opt/raylib")
 
-find_package(raylib 5.0 REQUIRED CONFIG)
+# find_package(raylib 5.0 REQUIRED CONFIG)
 
 # Recursively find all source files
 file(GLOB_RECURSE SOURCES 
@@ -29,5 +29,5 @@ set_target_properties(csfs PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
 )
 
-# Link raylib library
-target_link_libraries(csfs raylib)
+# # Link raylib library
+# target_link_libraries(csfs raylib)
