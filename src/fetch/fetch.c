@@ -13,6 +13,23 @@
 #define MAX_LINE_LENGTH 256
 #define MAX_INFO_LINES 50
 
+// ASCII art intégré directement dans le binaire
+static const char *default_ascii[] = {
+    "        ;++       ",
+    "      ;;+++X;     ",
+    "    :;;;;;XXXX    ",
+    "    :::::XXXXXX   ",
+    "   ::..::XXXXXX   ",
+    "   $+   .Xxx+++   ",
+    "  $$$X  .:++++++  ",
+    " X$$$$X$&&$X+;;;+ ",
+    ";XXXXX$&$$$$$$;;. ",
+    "  XXXX$$$$$XXXX   ",
+    "    XX$$XXXXXXX   ",
+    "         ;XXXX    "
+};
+static const int default_ascii_count = sizeof(default_ascii) / sizeof(default_ascii[0]);
+
 static char logo_lines[MAX_LOGO_LINES][MAX_LINE_LENGTH];
 static int logo_line_count = 0;
 static int logo_max_width = 0;
@@ -20,40 +37,17 @@ static int logo_max_width = 0;
 static char info_lines[MAX_INFO_LINES][MAX_LINE_LENGTH];
 static int info_line_count = 0;
 
-static void load_ascii_art(const char *filename) {
-    FILE *f = fopen(filename, "r");
-    if (!f) {
-        // Fallback to default logo
-        const char *default_lines[] = {
-            "        _______        ",
-            "       / _____ \\       ",
-            "      / /     \\ \\      ",
-            "     | |   C   | |     ",
-            "      \\ \\_____/ /      ",
-            "       \\_______/       "
-        };
-        logo_line_count = sizeof(default_lines) / sizeof(default_lines[0]);
-        for (int i = 0; i < logo_line_count; i++) {
-            strncpy(logo_lines[i], default_lines[i], MAX_LINE_LENGTH - 1);
-            int len = strlen(logo_lines[i]);
-            if (len > logo_max_width) logo_max_width = len;
-        }
-        return;
-    }
-    
-    logo_line_count = 0;
+static void load_ascii_art(void) {
+    // Utiliser l'ASCII art intégré par défaut
+    logo_line_count = default_ascii_count;
     logo_max_width = 0;
-    while (logo_line_count < MAX_LOGO_LINES && fgets(logo_lines[logo_line_count], MAX_LINE_LENGTH, f)) {
-        // Remove newline
-        size_t len = strlen(logo_lines[logo_line_count]);
-        if (len > 0 && logo_lines[logo_line_count][len - 1] == '\n') {
-            logo_lines[logo_line_count][len - 1] = '\0';
-            len--;
-        }
-        if ((int)len > logo_max_width) logo_max_width = (int)len;
-        logo_line_count++;
+    
+    for (int i = 0; i < default_ascii_count; i++) {
+        strncpy(logo_lines[i], default_ascii[i], MAX_LINE_LENGTH - 1);
+        logo_lines[i][MAX_LINE_LENGTH - 1] = '\0';
+        int len = strlen(logo_lines[i]);
+        if (len > logo_max_width) logo_max_width = len;
     }
-    fclose(f);
 }
 
 static void add_info_line(const char *text) {
@@ -213,8 +207,8 @@ int fetch_print(Shell *shell, const char **only, int only_count, int color_enabl
     (void)only;
     (void)only_count;
     
-    // Load ASCII art
-    load_ascii_art("assets/fetch.txt");
+    // Load ASCII art intégré
+    load_ascii_art();
     
     // Reset info lines
     info_line_count = 0;
