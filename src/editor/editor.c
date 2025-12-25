@@ -178,17 +178,17 @@ static int cx_to_rx(EditorRow *row, int cx) {
     return rx;
 }
 
-static int rx_to_cx(EditorRow *row, int rx) {
-    int cur_rx = 0;
-    int cx;
-    for (cx = 0; cx < row->size; cx++) {
-        if (row->chars[cx] == '\t')
-            cur_rx += (EDITOR_TAB_STOP - 1) - (cur_rx % EDITOR_TAB_STOP);
-        cur_rx++;
-        if (cur_rx > rx) return cx;
-    }
-    return cx;
-}
+// static int rx_to_cx(EditorRow *row, int rx) {
+//     int cur_rx = 0;
+//     int cx;
+//     for (cx = 0; cx < row->size; cx++) {
+//         if (row->chars[cx] == '\t')
+//             cur_rx += (EDITOR_TAB_STOP - 1) - (cur_rx % EDITOR_TAB_STOP);
+//         cur_rx++;
+//         if (cur_rx > rx) return cx;
+//     }
+//     return cx;
+// }
 
 static void update_row(EditorRow *row) {
     int tabs = 0;
@@ -371,9 +371,9 @@ static void load_from_fs(void) {
     Inode *inode = &E.shell->fs->inodes[idx];
     fseek(E.shell->fs->container, (long)inode->offset, SEEK_SET);
 
-    char *line = NULL;
-    size_t linecap = 0;
-    ssize_t linelen;
+    // char *line = NULL;
+    // size_t linecap = 0;
+    // ssize_t linelen;
     
     // Lire le contenu en mémoire
     char *content = malloc(inode->size + 1);
