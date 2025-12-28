@@ -207,18 +207,14 @@ int fetch_print(Shell *shell, const char **only, int only_count, int color_enabl
     (void)only;
     (void)only_count;
     
-    // Load ASCII art intégré
     load_ascii_art();
     
-    // Reset info lines
     info_line_count = 0;
     
-    // Collect all information
     collect_system_info(shell, color_enabled);
     collect_fs_info(shell, color_enabled);
     collect_colors(color_enabled);
     
-    // Render side by side
     render_side_by_side(color_enabled);
     
     return 0;
