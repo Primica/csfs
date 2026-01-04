@@ -5,6 +5,96 @@
 #include <string.h>
 #include <time.h>
 
+// Fonction de hash simple pour les chemins
+static uint32_t hash_path(const char *path) {
+    uint32_t hash = 5381;
+    int c;
+    while ((c = *path++)) {
+        hash = ((hash << 5) + hash) + c;
+    }
+    return hash % HASH_TABLE_SIZE;
+}
+
+// Initialise la hash table
+static void hash_table_init(FileSystem *fs) {
+    for (int i = 0; i < HASH_TABLE_SIZE; i++) {
+        fs->hash_table[i].inode_index = -1;
+        fs->hash_table[i].full_path[0] = '\0';
+    }
+}
+
+// Insere une entree dans la hash table avec gestion des collisions (linear probing)
+static void hash_table_insert(FileSystem *fs, const char *full_path, int inode_index) {
+    uint32_t idx = hash_path(full_path);
+    int attempts = 0;
+    
+    while (attempts < HASH_TABLE_SIZE) {
+        if (fs->hash_table[idx].inode_index == -1) {
+            fs->hash_table[idx].inode_index = inode_index;
+            strncpy(fs->hash_table[idx].full_path, full_path, MAX_PATH - 1);
+            fs->hash_table[idx].full_path[MAX_PATH - 1] = '\0';
+            return;
+        }
+        idx = (idx + 1) % HASH_TABLE_SIZE;
+        attempts++;
+    }
+    fprintf(stderr, "Avertissement : hash table pleine, insertion impossible\n");
+}
+
+// Recherche dans la hash table - retourne l'index de l'inode ou -1
+static int hash_table_lookup(FileSystem *fs, const char *full_path) {
+    uint32_t idx = hash_path(full_path);
+    int attempts = 0;
+    
+    while (attempts < HASH_TABLE_SIZE) {
+        if (fs->hash_table[idx].inode_index == -1) {
+            return -1;
+        }
+        if (strcmp(fs->hash_table[idx].full_path, full_path) == 0) {
+            return fs->hash_table[idx].inode_index;
+        }
+        idx = (idx + 1) % HASH_TABLE_SIZE;
+        attempts++;
+    }
+    return -1;
+}
+
+// Supprime une entree de la hash table
+static void hash_table_delete(FileSystem *fs, const char *full_path) {
+    uint32_t idx = hash_path(full_path);
+    int attempts = 0;
+    
+    while (attempts < HASH_TABLE_SIZE) {
+        if (fs->hash_table[idx].inode_index == -1) {
+            return;
+        }
+        if (strcmp(fs->hash_table[idx].full_path, full_path) == 0) {
+            fs->hash_table[idx].inode_index = -1;
+            fs->hash_table[idx].full_path[0] = '\0';
+            return;
+        }
+        idx = (idx + 1) % HASH_TABLE_SIZE;
+        attempts++;
+    }
+}
+
+// Reconstruit la hash table a partir des inodes actuels
+static void hash_table_rebuild(FileSystem *fs) {
+    hash_table_init(fs);
+    for (int i = 0; i < MAX_FILES; i++) {
+        if (fs->inodes[i].filename[0] != '\0') {
+            char full_path[MAX_PATH];
+            if (strcmp(fs->inodes[i].parent_path, "/") == 0) {
+                snprintf(full_path, MAX_PATH, "/%s", fs->inodes[i].filename);
+            } else {
+                snprintf(full_path, MAX_PATH, "%s/%s", fs->inodes[i].parent_path,
+                         fs->inodes[i].filename);
+            }
+            hash_table_insert(fs, full_path, i);
+        }
+    }
+}
+
 static char *normalize_path(const char *path) {
     char *result = malloc(MAX_PATH);
     if (!result) return NULL;
@@ -99,22 +189,14 @@ static void extract_parent_path(const char *path, char *parent, size_t size) {
 
 static int path_exists(FileSystem *fs, const char *path, int *is_dir) {
     char *normalized = normalize_path(path);
-    for (int i = 0; i < MAX_FILES; i++) {
-        if (fs->inodes[i].filename[0] != '\0') {
-            char full_path[MAX_PATH];
-            if (strcmp(fs->inodes[i].parent_path, "/") == 0) {
-                snprintf(full_path, MAX_PATH, "/%s", fs->inodes[i].filename);
-            } else {
-                snprintf(full_path, MAX_PATH, "%s/%s", fs->inodes[i].parent_path,
-                         fs->inodes[i].filename);
-            }
-            if (strcmp(full_path, normalized) == 0) {
-                if (is_dir) *is_dir = fs->inodes[i].is_directory;
-                free(normalized);
-                return i;
-            }
-        }
+    
+    int idx = hash_table_lookup(fs, normalized);
+    if (idx >= 0) {
+        if (is_dir) *is_dir = fs->inodes[idx].is_directory;
+        free(normalized);
+        return idx;
     }
+    
     free(normalized);
     return -1;
 }
@@ -191,6 +273,9 @@ FileSystem *fs_open(const char *path) {
         return NULL;
     }
 
+    // Construire la hash table pour recherche O(1)
+    hash_table_rebuild(fs);
+
     return fs;
 }
 
@@ -261,6 +346,9 @@ int fs_mkdir(FileSystem *fs, const char *path) {
     fs->inodes[idx].modified = fs->inodes[idx].created;
 
     fs->sb.num_files++;
+
+    // Ajouter a la hash table pour acces O(1)
+    hash_table_insert(fs, normalized, idx);
 
     printf("Répertoire créé : %s\n", normalized);
     free(normalized);
@@ -334,6 +422,9 @@ int fs_add_file(FileSystem *fs, const char *fs_path, const char *source_path) {
     fclose(src);
     fs->sb.num_files++;
 
+    // Ajouter a la hash table pour acces O(1)
+    hash_table_insert(fs, normalized, idx);
+
     printf("Fichier ajouté : %s (%lu octets)\n", normalized, (unsigned long)size);
     free(normalized);
     return 0;
@@ -390,22 +481,8 @@ int fs_copy_file(FileSystem *fs, const char *src_path, const char *dest_path) {
     char *normalized_src = normalize_path(src_path);
     char *normalized_dest = normalize_path(dest_path);
 
-    int src_idx = -1;
-    for (int i = 0; i < MAX_FILES; i++) {
-        if (fs->inodes[i].filename[0] != '\0') {
-            char full_path[MAX_PATH];
-            if (strcmp(fs->inodes[i].parent_path, "/") == 0) {
-                snprintf(full_path, MAX_PATH, "/%s", fs->inodes[i].filename);
-            } else {
-                snprintf(full_path, MAX_PATH, "%s/%s", fs->inodes[i].parent_path,
-                         fs->inodes[i].filename);
-            }
-            if (strcmp(full_path, normalized_src) == 0) {
-                src_idx = i;
-                break;
-            }
-        }
-    }
+    // Utiliser hash table pour recherche rapide
+    int src_idx = hash_table_lookup(fs, normalized_src);
 
     if (src_idx == -1) {
         fprintf(stderr, "Erreur : fichier source '%s' introuvable\n", normalized_src);
@@ -481,6 +558,14 @@ int fs_copy_file(FileSystem *fs, const char *src_path, const char *dest_path) {
 
     printf("Fichier copié : %s -> %s (%lu octets)\n", normalized_src, normalized_dest,
            (unsigned long)src_inode->size);
+    
+    // Ajouter a la hash table pour acces O(1)
+    hash_table_insert(fs, normalized_dest, dest_idx);
+    
+    fs->sb.num_files++;
+
+    printf("Fichier copié : %s -> %s (%lu octets)\n", normalized_src, normalized_dest,
+           (unsigned long)src_inode->size);
     free(normalized_src);
     free(normalized_dest);
     return 0;
@@ -495,22 +580,8 @@ int fs_move_file(FileSystem *fs, const char *src_path, const char *dest_path) {
     char *normalized_src = normalize_path(src_path);
     char *normalized_dest = normalize_path(dest_path);
 
-    int src_idx = -1;
-    for (int i = 0; i < MAX_FILES; i++) {
-        if (fs->inodes[i].filename[0] != '\0') {
-            char full_path[MAX_PATH];
-            if (strcmp(fs->inodes[i].parent_path, "/") == 0) {
-                snprintf(full_path, MAX_PATH, "/%s", fs->inodes[i].filename);
-            } else {
-                snprintf(full_path, MAX_PATH, "%s/%s", fs->inodes[i].parent_path,
-                         fs->inodes[i].filename);
-            }
-            if (strcmp(full_path, normalized_src) == 0) {
-                src_idx = i;
-                break;
-            }
-        }
-    }
+    // Utiliser hash table pour recherche rapide
+    int src_idx = hash_table_lookup(fs, normalized_src);
 
     if (src_idx == -1) {
         fprintf(stderr, "Erreur : '%s' introuvable\n", normalized_src);
@@ -539,24 +610,43 @@ int fs_move_file(FileSystem *fs, const char *src_path, const char *dest_path) {
     }
 
     if (!fs->inodes[src_idx].is_directory) {
+        // Supprimer l'ancienne entree de la hash table
+        hash_table_delete(fs, normalized_src);
+        
         strncpy(fs->inodes[src_idx].filename, filename, MAX_FILENAME - 1);
         fs->inodes[src_idx].filename[MAX_FILENAME - 1] = '\0';
         strncpy(fs->inodes[src_idx].parent_path, parent_path, MAX_PATH - 1);
         fs->inodes[src_idx].parent_path[MAX_PATH - 1] = '\0';
         fs->inodes[src_idx].modified = time(NULL);
+
+        // Ajouter la nouvelle entree a la hash table
+        hash_table_insert(fs, normalized_dest, src_idx);
 
         printf("Déplacé : %s -> %s\n", normalized_src, normalized_dest);
     } else {
+        // Supprimer l'ancienne entree de la hash table
+        hash_table_delete(fs, normalized_src);
+        
         strncpy(fs->inodes[src_idx].filename, filename, MAX_FILENAME - 1);
         fs->inodes[src_idx].filename[MAX_FILENAME - 1] = '\0';
         strncpy(fs->inodes[src_idx].parent_path, parent_path, MAX_PATH - 1);
         fs->inodes[src_idx].parent_path[MAX_PATH - 1] = '\0';
         fs->inodes[src_idx].modified = time(NULL);
 
+        // Ajouter la nouvelle entree a la hash table
+        hash_table_insert(fs, normalized_dest, src_idx);
+
+        // Mettre a jour les entrees enfants dans la hash table
         for (int i = 0; i < MAX_FILES; i++) {
             if (fs->inodes[i].filename[0] != '\0' && i != src_idx) {
                 if (strncmp(fs->inodes[i].parent_path, normalized_src,
                            strlen(normalized_src)) == 0) {
+                    char old_full_path[MAX_PATH];
+                    snprintf(old_full_path, MAX_PATH, "%s/%s", fs->inodes[i].parent_path,
+                            fs->inodes[i].filename);
+                    
+                    hash_table_delete(fs, old_full_path);
+                    
                     char old_parent[MAX_PATH];
                     strncpy(old_parent, fs->inodes[i].parent_path, MAX_PATH - 1);
 
@@ -567,6 +657,12 @@ int fs_move_file(FileSystem *fs, const char *src_path, const char *dest_path) {
 
                     strncpy(fs->inodes[i].parent_path, new_parent, MAX_PATH - 1);
                     fs->inodes[i].parent_path[MAX_PATH - 1] = '\0';
+                    
+                    // Ajouter la nouvelle entree a la hash table
+                    char new_full_path[MAX_PATH];
+                    snprintf(new_full_path, MAX_PATH, "%s/%s", new_parent,
+                            fs->inodes[i].filename);
+                    hash_table_insert(fs, new_full_path, i);
                 }
             }
         }
