@@ -346,14 +346,15 @@ static void load_from_fs(void) {
     // Chercher l'inode
     int idx = -1;
     for (int i = 0; i < MAX_FILES; i++) {
-        if (E.shell->fs->inodes[i].filename[0] != '\0') {
+        Inode *inode = get_inode(E.shell->fs, i);
+        if (inode->filename[0] != '\0') {
             char full_path[MAX_PATH];
-            if (strcmp(E.shell->fs->inodes[i].parent_path, "/") == 0) {
-                snprintf(full_path, MAX_PATH, "/%s", E.shell->fs->inodes[i].filename);
+            if (strcmp(inode->parent_path, "/") == 0) {
+                snprintf(full_path, MAX_PATH, "/%s", inode->filename);
             } else {
                 snprintf(full_path, MAX_PATH, "%s/%s", 
-                         E.shell->fs->inodes[i].parent_path,
-                         E.shell->fs->inodes[i].filename);
+                         inode->parent_path,
+                         inode->filename);
             }
             if (strcmp(full_path, resolved) == 0) {
                 idx = i;
@@ -362,13 +363,13 @@ static void load_from_fs(void) {
         }
     }
 
-    if (idx == -1 || E.shell->fs->inodes[idx].is_directory) {
+    if (idx == -1 || get_inode(E.shell->fs, idx)->is_directory) {
         // Nouveau fichier ou répertoire
         snprintf(E.statusmsg, sizeof(E.statusmsg), "Nouveau fichier");
         return;
     }
 
-    Inode *inode = &E.shell->fs->inodes[idx];
+    Inode *inode = get_inode(E.shell->fs, idx);
     fseek(E.shell->fs->container, (long)inode->offset, SEEK_SET);
 
     // char *line = NULL;
@@ -436,17 +437,19 @@ static int save_to_fs(void) {
 
     // Supprimer l'ancien si existe
     for (int i = 0; i < MAX_FILES; i++) {
-        if (E.shell->fs->inodes[i].filename[0] != '\0') {
+        Inode *inode = get_inode(E.shell->fs, i);
+        if (inode->filename[0] != '\0') {
             char full_path[MAX_PATH];
-            if (strcmp(E.shell->fs->inodes[i].parent_path, "/") == 0) {
-                snprintf(full_path, MAX_PATH, "/%s", E.shell->fs->inodes[i].filename);
+            if (strcmp(inode->parent_path, "/") == 0) {
+                snprintf(full_path, MAX_PATH, "/%s", inode->filename);
             } else {
                 snprintf(full_path, MAX_PATH, "%s/%s",
-                         E.shell->fs->inodes[i].parent_path,
-                         E.shell->fs->inodes[i].filename);
+                         inode->parent_path,
+                         inode->filename);
             }
             if (strcmp(full_path, resolved) == 0) {
-                E.shell->fs->inodes[i].filename[0] = '\0';
+                inode->filename[0] = '\0';
+                mark_inode_dirty(E.shell->fs, i);
                 E.shell->fs->sb.num_files--;
                 break;
             }

@@ -100,18 +100,19 @@ static int complete_paths(Shell *shell, const char *partial, char **suggestions,
 
     // Parcourir les inodes pour trouver les fichiers/répertoires correspondants
     for (int i = 0; i < MAX_FILES && count < max_count; i++) {
-        if (shell->fs->inodes[i].filename[0] == '\0') continue;
+        Inode *inode = get_inode(shell->fs, i);
+        if (inode->filename[0] == '\0') continue;
 
         // Vérifier si le parent correspond
-        if (strcmp(shell->fs->inodes[i].parent_path, parent) != 0) {
+        if (strcmp(inode->parent_path, parent) != 0) {
             continue;
         }
 
         // Vérifier si le nom commence par le partial
-        if (strncmp(shell->fs->inodes[i].filename, filename_partial, strlen(filename_partial)) == 0) {
+        if (strncmp(inode->filename, filename_partial, strlen(filename_partial)) == 0) {
             char full_name[MAX_FILENAME];
-            strcpy(full_name, shell->fs->inodes[i].filename);
-            if (shell->fs->inodes[i].is_directory) {
+            strcpy(full_name, inode->filename);
+            if (inode->is_directory) {
                 strcat(full_name, "/");
             }
             suggestions[count] = strdup(full_name);

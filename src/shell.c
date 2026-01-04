@@ -215,11 +215,12 @@ static int inode_index_for_path(Shell *shell, const char *path, int *is_dir_out)
     }
 
     for (int i = 0; i < MAX_FILES; i++) {
-        if (shell->fs->inodes[i].filename[0] != '\0') {
+        Inode *inode = get_inode(shell->fs, i);
+        if (inode->filename[0] != '\0') {
             char full_path[MAX_PATH];
-            build_full_path_from_inode(&shell->fs->inodes[i], full_path, sizeof(full_path));
+            build_full_path_from_inode(inode, full_path, sizeof(full_path));
             if (strcmp(full_path, path) == 0) {
-                if (is_dir_out) *is_dir_out = shell->fs->inodes[i].is_directory;
+                if (is_dir_out) *is_dir_out = inode->is_directory;
                 return i;
             }
         }
@@ -278,8 +279,9 @@ static int delete_path(Shell *sh, const char *abs_path, int recursive, int force
     if (is_dir) {
         int has_child = 0;
         for (int i = 0; i < MAX_FILES; i++) {
-            if (sh->fs->inodes[i].filename[0] != '\0' &&
-                strcmp(sh->fs->inodes[i].parent_path, abs_path) == 0) {
+            Inode *inode = get_inode(sh->fs, i);
+            if (inode->filename[0] != '\0' &&
+                strcmp(inode->parent_path, abs_path) == 0) {
                 has_child = 1;
                 if (!recursive) {
                     fprintf(stderr, "rm: '%s' n'est pas vide (utiliser -r)\n", abs_path);
@@ -290,10 +292,11 @@ static int delete_path(Shell *sh, const char *abs_path, int recursive, int force
 
         if (has_child && recursive) {
             for (int i = 0; i < MAX_FILES; i++) {
-                if (sh->fs->inodes[i].filename[0] != '\0' &&
-                    strcmp(sh->fs->inodes[i].parent_path, abs_path) == 0) {
+                Inode *inode = get_inode(sh->fs, i);
+                if (inode->filename[0] != '\0' &&
+                    strcmp(inode->parent_path, abs_path) == 0) {
                     char child_path[MAX_PATH];
-                    build_full_path_from_inode(&sh->fs->inodes[i], child_path, sizeof(child_path));
+                    build_full_path_from_inode(inode, child_path, sizeof(child_path));
                     if (delete_path(sh, child_path, recursive, force) != 0 && !force) {
                         return -1;
                     }
@@ -302,7 +305,9 @@ static int delete_path(Shell *sh, const char *abs_path, int recursive, int force
         }
     }
 
-    sh->fs->inodes[idx].filename[0] = '\0';
+    Inode *inode = get_inode(sh->fs, idx);
+    inode->filename[0] = '\0';
+    mark_inode_dirty(sh->fs, idx);
     sh->fs->sb.num_files--;
     if (!force) printf("Supprimé: %s\n", abs_path);
     return 0;
@@ -326,9 +331,10 @@ static int expand_fs_glob(Shell *shell, const char *input, char results[][MAX_PA
 
     int count = 0;
     for (int i = 0; i < MAX_FILES && count < max_results; i++) {
-        if (shell->fs->inodes[i].filename[0] != '\0') {
+        Inode *inode = get_inode(shell->fs, i);
+        if (inode->filename[0] != '\0') {
             char full_path[MAX_PATH];
-            build_full_path_from_inode(&shell->fs->inodes[i], full_path, sizeof(full_path));
+            build_full_path_from_inode(inode, full_path, sizeof(full_path));
 
             if (wildcard_match(pattern, full_path)) {
                 strncpy(results[count], full_path, MAX_PATH - 1);
@@ -448,17 +454,18 @@ static int cmd_cd(Shell *shell, Command *cmd) {
         is_dir = 1;
     } else {
         for (int i = 0; i < MAX_FILES; i++) {
-            if (shell->fs->inodes[i].filename[0] != '\0') {
+            Inode *inode = get_inode(shell->fs, i);
+            if (inode->filename[0] != '\0') {
                 char full_path[MAX_PATH];
-                if (strcmp(shell->fs->inodes[i].parent_path, "/") == 0) {
-                    snprintf(full_path, MAX_PATH, "/%s", shell->fs->inodes[i].filename);
+                if (strcmp(inode->parent_path, "/") == 0) {
+                    snprintf(full_path, MAX_PATH, "/%s", inode->filename);
                 } else {
-                    snprintf(full_path, MAX_PATH, "%s/%s", shell->fs->inodes[i].parent_path,
-                             shell->fs->inodes[i].filename);
+                    snprintf(full_path, MAX_PATH, "%s/%s", inode->parent_path,
+                             inode->filename);
                 }
                 if (strcmp(full_path, resolved) == 0) {
                     idx = i;
-                    is_dir = shell->fs->inodes[i].is_directory;
+                    is_dir = inode->is_directory;
                     break;
                 }
             }
@@ -712,7 +719,7 @@ static int cmd_cat(Shell *shell, Command *cmd) {
             continue;
         }
 
-        Inode *inode = &shell->fs->inodes[idx];
+        Inode *inode = get_inode(shell->fs, idx);
         fseek(shell->fs->container, (long)inode->offset, SEEK_SET);
 
         char buffer[BLOCK_SIZE];
@@ -739,15 +746,16 @@ static void extract_recursive_dir(Shell *shell, const char *fs_path, const char 
     system(mkdir_cmd);
 
     for (int i = 0; i < MAX_FILES; i++) {
-        if (shell->fs->inodes[i].filename[0] != '\0' &&
-            strcmp(shell->fs->inodes[i].parent_path, fs_path) == 0) {
+        Inode *inode = get_inode(shell->fs, i);
+        if (inode->filename[0] != '\0' &&
+            strcmp(inode->parent_path, fs_path) == 0) {
             char child_fs[MAX_PATH];
-            build_full_path_from_inode(&shell->fs->inodes[i], child_fs, sizeof(child_fs));
+            build_full_path_from_inode(inode, child_fs, sizeof(child_fs));
 
             char child_host[MAX_PATH];
-            snprintf(child_host, sizeof(child_host), "%s/%s", host_base, shell->fs->inodes[i].filename);
+            snprintf(child_host, sizeof(child_host), "%s/%s", host_base, inode->filename);
 
-            if (shell->fs->inodes[i].is_directory) {
+            if (inode->is_directory) {
                 extract_recursive_dir(shell, child_fs, child_host, error);
             } else {
                 if (fs_extract_file(shell->fs, child_fs, child_host) != 0) {
@@ -1030,10 +1038,11 @@ static void tree_recursive(Shell *shell, const char *path, int depth, TreeOption
     if (opts->max_depth >= 0 && depth > opts->max_depth) return;
 
     for (int i = 0; i < MAX_FILES; i++) {
-        if (shell->fs->inodes[i].filename[0] != '\0' &&
-            strcmp(shell->fs->inodes[i].parent_path, path) == 0) {
+        Inode *inode = get_inode(shell->fs, i);
+        if (inode->filename[0] != '\0' &&
+            strcmp(inode->parent_path, path) == 0) {
 
-            if (opts->dirs_only && !shell->fs->inodes[i].is_directory) continue;
+            if (opts->dirs_only && !inode->is_directory) continue;
 
             for (int d = 0; d < depth - 1; d++) {
                 printf("%s   ", is_last[d] ? " " : "│");
@@ -1041,9 +1050,10 @@ static void tree_recursive(Shell *shell, const char *path, int depth, TreeOption
             if (depth > 0) {
                 int remaining = 0;
                 for (int j = i + 1; j < MAX_FILES; j++) {
-                    if (shell->fs->inodes[j].filename[0] != '\0' &&
-                        strcmp(shell->fs->inodes[j].parent_path, path) == 0) {
-                        if (!opts->dirs_only || shell->fs->inodes[j].is_directory) {
+                    Inode *inode_j = get_inode(shell->fs, j);
+                    if (inode_j->filename[0] != '\0' &&
+                        strcmp(inode_j->parent_path, path) == 0) {
+                        if (!opts->dirs_only || inode_j->is_directory) {
                             remaining++;
                         }
                     }
@@ -1052,29 +1062,29 @@ static void tree_recursive(Shell *shell, const char *path, int depth, TreeOption
                 is_last[depth - 1] = (remaining == 0);
             }
 
-            if (shell->fs->inodes[i].is_directory) {
-                printf("\033[1;34m%s\033[0m/", shell->fs->inodes[i].filename);
+            if (inode->is_directory) {
+                printf("\033[1;34m%s\033[0m/", inode->filename);
             } else {
-                printf("%s", shell->fs->inodes[i].filename);
+                printf("%s", inode->filename);
             }
 
             if (opts->show_metadata) {
-                if (!shell->fs->inodes[i].is_directory) {
-                    printf(" (%lu B)", (unsigned long)shell->fs->inodes[i].size);
+                if (!inode->is_directory) {
+                    printf(" (%lu B)", (unsigned long)inode->size);
                 }
                 char time_str[20];
-                struct tm *tm_info = localtime(&shell->fs->inodes[i].modified);
+                struct tm *tm_info = localtime(&inode->modified);
                 strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M", tm_info);
                 printf(" [%s]", time_str);
             }
             printf("\n");
 
-            if (shell->fs->inodes[i].is_directory) {
+            if (inode->is_directory) {
                 char subdir_path[MAX_PATH];
                 if (strcmp(path, "/") == 0) {
-                    snprintf(subdir_path, MAX_PATH, "/%s", shell->fs->inodes[i].filename);
+                    snprintf(subdir_path, MAX_PATH, "/%s", inode->filename);
                 } else {
-                    snprintf(subdir_path, MAX_PATH, "%s/%s", path, shell->fs->inodes[i].filename);
+                    snprintf(subdir_path, MAX_PATH, "%s/%s", path, inode->filename);
                 }
                 tree_recursive(shell, subdir_path, depth + 1, opts, is_last, depth);
             }
@@ -1112,13 +1122,14 @@ static int cmd_tree(Shell *shell, Command *cmd) {
 
     int idx = -1;
     for (int i = 0; i < MAX_FILES; i++) {
-        if (shell->fs->inodes[i].filename[0] != '\0') {
+        Inode *inode = get_inode(shell->fs, i);
+        if (inode->filename[0] != '\0') {
             char full_path[MAX_PATH];
-            if (strcmp(shell->fs->inodes[i].parent_path, "/") == 0) {
-                snprintf(full_path, MAX_PATH, "/%s", shell->fs->inodes[i].filename);
+            if (strcmp(inode->parent_path, "/") == 0) {
+                snprintf(full_path, MAX_PATH, "/%s", inode->filename);
             } else {
-                snprintf(full_path, MAX_PATH, "%s/%s", shell->fs->inodes[i].parent_path,
-                         shell->fs->inodes[i].filename);
+                snprintf(full_path, MAX_PATH, "%s/%s", inode->parent_path,
+                         inode->filename);
             }
             if (strcmp(full_path, resolved) == 0) {
                 idx = i;
@@ -1127,10 +1138,13 @@ static int cmd_tree(Shell *shell, Command *cmd) {
         }
     }
 
-    if (idx != -1 && !shell->fs->inodes[idx].is_directory && strcmp(resolved, "/") != 0) {
-        fprintf(stderr, "tree: '%s' n'est pas un répertoire\n", resolved);
-        free(resolved);
-        return -1;
+    if (idx != -1) {
+        Inode *inode = get_inode(shell->fs, idx);
+        if (!inode->is_directory && strcmp(resolved, "/") != 0) {
+            fprintf(stderr, "tree: '%s' n'est pas un répertoire\n", resolved);
+            free(resolved);
+            return -1;
+        }
     }
 
     printf("\033[1;34m%s\033[0m\n", resolved);
@@ -1140,8 +1154,9 @@ static int cmd_tree(Shell *shell, Command *cmd) {
 
     int dirs = 0, files = 0;
     for (int i = 0; i < MAX_FILES; i++) {
-        if (shell->fs->inodes[i].filename[0] != '\0') {
-            if (shell->fs->inodes[i].is_directory) dirs++;
+        Inode *inode = get_inode(shell->fs, i);
+        if (inode->filename[0] != '\0') {
+            if (inode->is_directory) dirs++;
             else files++;
         }
     }
@@ -1164,16 +1179,17 @@ static int name_matches(const char *name, const char *pattern) {
 
 static void find_recursive(Shell *shell, const char *path, const char *pattern) {
     for (int i = 0; i < MAX_FILES; i++) {
-        if (shell->fs->inodes[i].filename[0] != '\0' &&
-            strcmp(shell->fs->inodes[i].parent_path, path) == 0) {
+        Inode *inode = get_inode(shell->fs, i);
+        if (inode->filename[0] != '\0' &&
+            strcmp(inode->parent_path, path) == 0) {
             char child_path[MAX_PATH];
-            build_full_path_from_inode(&shell->fs->inodes[i], child_path, sizeof(child_path));
+            build_full_path_from_inode(inode, child_path, sizeof(child_path));
 
-            if (name_matches(shell->fs->inodes[i].filename, pattern)) {
-                printf("%s%s\n", child_path, shell->fs->inodes[i].is_directory ? "/" : "");
+            if (name_matches(inode->filename, pattern)) {
+                printf("%s%s\n", child_path, inode->is_directory ? "/" : "");
             }
 
-            if (shell->fs->inodes[i].is_directory) {
+            if (inode->is_directory) {
                 find_recursive(shell, child_path, pattern);
             }
         }
@@ -1211,7 +1227,8 @@ static int cmd_find(Shell *shell, Command *cmd) {
 
     // Si le point de départ est un fichier, on évalue uniquement ce fichier
     if (idx >= 0 && !is_dir) {
-        if (name_matches(shell->fs->inodes[idx].filename, pattern)) {
+        Inode *inode = get_inode(shell->fs, idx);
+        if (name_matches(inode->filename, pattern)) {
             printf("%s\n", start_path);
         }
         free(start_path);
@@ -1283,7 +1300,8 @@ static int cmd_stat(Shell *shell, Command *cmd) {
             if (idx == -1) {
                 print_stat_info(matches[mi], NULL, 1);
             } else {
-                print_stat_info(matches[mi], &shell->fs->inodes[idx], is_dir);
+                Inode *inode = get_inode(shell->fs, idx);
+                print_stat_info(matches[mi], inode, is_dir);
             }
         }
 

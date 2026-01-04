@@ -78,17 +78,98 @@ static void hash_table_delete(FileSystem *fs, const char *full_path) {
     }
 }
 
+// --- Gestion du Cache LRU ---
+
+static void write_inode_to_disk(FileSystem *fs, int inode_index, const Inode *inode) {
+    uint64_t offset = sizeof(SuperBlock) + (uint64_t)inode_index * sizeof(Inode);
+    fseek(fs->container, offset, SEEK_SET);
+    fwrite(inode, sizeof(Inode), 1, fs->container);
+}
+
+static void read_inode_from_disk(FileSystem *fs, int inode_index, Inode *inode) {
+    uint64_t offset = sizeof(SuperBlock) + (uint64_t)inode_index * sizeof(Inode);
+    fseek(fs->container, offset, SEEK_SET);
+    if (fread(inode, sizeof(Inode), 1, fs->container) != 1) {
+        memset(inode, 0, sizeof(Inode));
+    }
+}
+
+static void cache_remove(FileSystem *fs, CacheNode *node) {
+    if (node->prev) node->prev->next = node->next;
+    else fs->cache_head = node->next;
+    
+    if (node->next) node->next->prev = node->prev;
+    else fs->cache_tail = node->prev;
+    
+    node->prev = node->next = NULL;
+}
+
+static void cache_push_front(FileSystem *fs, CacheNode *node) {
+    node->next = fs->cache_head;
+    node->prev = NULL;
+    if (fs->cache_head) fs->cache_head->prev = node;
+    fs->cache_head = node;
+    if (!fs->cache_tail) fs->cache_tail = node;
+}
+
+Inode* get_inode(FileSystem *fs, int inode_index) {
+    if (inode_index < 0 || inode_index >= MAX_FILES) return NULL;
+    
+    // Chercher dans le cache
+    for (int i = 0; i < fs->cache_count; i++) {
+        if (fs->cache_nodes[i]->inode_index == inode_index) {
+            CacheNode *node = fs->cache_nodes[i];
+            // Déplacer à l'avant (LRU)
+            cache_remove(fs, node);
+            cache_push_front(fs, node);
+            return &node->inode;
+        }
+    }
+    
+    // Pas dans le cache, charger depuis le disque
+    CacheNode *node = NULL;
+    if (fs->cache_count < LRU_CACHE_SIZE) {
+        node = malloc(sizeof(CacheNode));
+        fs->cache_nodes[fs->cache_count++] = node;
+    } else {
+        // Évincer le plus ancien (tail)
+        node = fs->cache_tail;
+        if (node->dirty) {
+            write_inode_to_disk(fs, node->inode_index, &node->inode);
+        }
+        cache_remove(fs, node);
+    }
+    
+    node->inode_index = inode_index;
+    read_inode_from_disk(fs, inode_index, &node->inode);
+    node->dirty = 0;
+    cache_push_front(fs, node);
+    
+    return &node->inode;
+}
+
+void mark_inode_dirty(FileSystem *fs, int inode_index) {
+    for (int i = 0; i < fs->cache_count; i++) {
+        if (fs->cache_nodes[i]->inode_index == inode_index) {
+            fs->cache_nodes[i]->dirty = 1;
+            return;
+        }
+    }
+}
+
 // Reconstruit la hash table a partir des inodes actuels
 static void hash_table_rebuild(FileSystem *fs) {
     hash_table_init(fs);
     for (int i = 0; i < MAX_FILES; i++) {
-        if (fs->inodes[i].filename[0] != '\0') {
+        Inode inode;
+        read_inode_from_disk(fs, i, &inode);
+        if (inode.filename[0] != '\0') {
             char full_path[MAX_PATH];
-            if (strcmp(fs->inodes[i].parent_path, "/") == 0) {
-                snprintf(full_path, MAX_PATH, "/%s", fs->inodes[i].filename);
+            if (strcmp(inode.parent_path, "/") == 0) {
+                snprintf(full_path, MAX_PATH, "/%s", inode.filename);
             } else {
-                snprintf(full_path, MAX_PATH, "%s/%s", fs->inodes[i].parent_path,
-                         fs->inodes[i].filename);
+                snprintf(full_path, MAX_PATH, "%s/%s", inode.parent_path,
+                         inode.filename);
             }
             hash_table_insert(fs, full_path, i);
         }
@@ -192,7 +273,10 @@ static int path_exists(FileSystem *fs, const char *path, int *is_dir) {
     
     int idx = hash_table_lookup(fs, normalized);
     if (idx >= 0) {
-        if (is_dir) *is_dir = fs->inodes[idx].is_directory;
+        if (is_dir) {
+            Inode *inode = get_inode(fs, idx);
+            *is_dir = inode ? inode->is_directory : 0;
+        }
         free(normalized);
         return idx;
     }
@@ -266,11 +350,12 @@ FileSystem *fs_open(const char *path) {
         return NULL;
     }
 
-    if (fread(fs->inodes, sizeof(Inode), MAX_FILES, fs->container) != MAX_FILES) {
-        perror("Lecture de la table d'inodes échouée");
-        fclose(fs->container);
-        free(fs);
-        return NULL;
+    // Initialiser le cache LRU
+    fs->cache_head = NULL;
+    fs->cache_tail = NULL;
+    fs->cache_count = 0;
+    for (int i = 0; i < LRU_CACHE_SIZE; i++) {
+        fs->cache_nodes[i] = NULL;
     }
 
     // Construire la hash table pour recherche O(1)
@@ -282,9 +367,21 @@ FileSystem *fs_open(const char *path) {
 void fs_close(FileSystem *fs) {
     if (!fs) return;
 
+    // Sauvegarder le SuperBlock
     fseek(fs->container, 0, SEEK_SET);
     fwrite(&fs->sb, sizeof(SuperBlock), 1, fs->container);
-    fwrite(fs->inodes, sizeof(Inode), MAX_FILES, fs->container);
+
+    // Écrire les inodes sales du cache sur le disque
+    for (int i = 0; i < fs->cache_count; i++) {
+        if (fs->cache_nodes[i]->dirty) {
+            write_inode_to_disk(fs, fs->cache_nodes[i]->inode_index, &fs->cache_nodes[i]->inode);
+        }
+    }
+
+    // Libérer la mémoire du cache
+    for (int i = 0; i < fs->cache_count; i++) {
+        free(fs->cache_nodes[i]);
+    }
 
     fclose(fs->container);
     free(fs);
@@ -292,7 +389,9 @@ void fs_close(FileSystem *fs) {
 
 static int find_free_inode(FileSystem *fs) {
     for (int i = 0; i < MAX_FILES; i++) {
-        if (fs->inodes[i].filename[0] == '\0') return i;
+        Inode inode;
+        read_inode_from_disk(fs, i, &inode);
+        if (inode.filename[0] == '\0') return i;
     }
     return -1;
 }
@@ -300,9 +399,17 @@ static int find_free_inode(FileSystem *fs) {
 static uint64_t find_data_end(const FileSystem *fs) {
     uint64_t offset = fs->sb.data_offset;
     for (int i = 0; i < MAX_FILES; i++) {
-        if (fs->inodes[i].filename[0] != '\0' && !fs->inodes[i].is_directory) {
-            uint64_t end = fs->inodes[i].offset + fs->inodes[i].size;
-            if (end > offset) offset = end;
+        Inode inode;
+        // On doit utiliser read_inode_from_disk ici car fs est const dans la signature originale, 
+        // mais FileSystem* n'est pas vraiment const si on doit lire du disque (fseek/fread sur container).
+        // On va tricher un peu sur le const pour l'instant ou changer la signature.
+        uint64_t inode_offset = sizeof(SuperBlock) + (uint64_t)i * sizeof(Inode);
+        fseek(fs->container, inode_offset, SEEK_SET);
+        if (fread(&inode, sizeof(Inode), 1, fs->container) == 1) {
+            if (inode.filename[0] != '\0' && !inode.is_directory) {
+                uint64_t end = inode.offset + inode.size;
+                if (end > offset) offset = end;
+            }
         }
     }
     return offset;
@@ -335,15 +442,17 @@ int fs_mkdir(FileSystem *fs, const char *path) {
         return -1;
     }
 
-    strncpy(fs->inodes[idx].filename, dirname, MAX_FILENAME - 1);
-    fs->inodes[idx].filename[MAX_FILENAME - 1] = '\0';
-    strncpy(fs->inodes[idx].parent_path, parent_path, MAX_PATH - 1);
-    fs->inodes[idx].parent_path[MAX_PATH - 1] = '\0';
-    fs->inodes[idx].is_directory = 1;
-    fs->inodes[idx].size = 0;
-    fs->inodes[idx].offset = 0;
-    fs->inodes[idx].created = time(NULL);
-    fs->inodes[idx].modified = fs->inodes[idx].created;
+    Inode *inode = get_inode(fs, idx);
+    strncpy(inode->filename, dirname, MAX_FILENAME - 1);
+    inode->filename[MAX_FILENAME - 1] = '\0';
+    strncpy(inode->parent_path, parent_path, MAX_PATH - 1);
+    inode->parent_path[MAX_PATH - 1] = '\0';
+    inode->is_directory = 1;
+    inode->size = 0;
+    inode->offset = 0;
+    inode->created = time(NULL);
+    inode->modified = inode->created;
+    mark_inode_dirty(fs, idx);
 
     fs->sb.num_files++;
 
@@ -402,15 +511,17 @@ int fs_add_file(FileSystem *fs, const char *fs_path, const char *source_path) {
 
     uint64_t offset = find_data_end(fs);
 
-    strncpy(fs->inodes[idx].filename, filename, MAX_FILENAME - 1);
-    fs->inodes[idx].filename[MAX_FILENAME - 1] = '\0';
-    strncpy(fs->inodes[idx].parent_path, parent_path, MAX_PATH - 1);
-    fs->inodes[idx].parent_path[MAX_PATH - 1] = '\0';
-    fs->inodes[idx].is_directory = 0;
-    fs->inodes[idx].size = size;
-    fs->inodes[idx].offset = offset;
-    fs->inodes[idx].created = time(NULL);
-    fs->inodes[idx].modified = fs->inodes[idx].created;
+    Inode *inode = get_inode(fs, idx);
+    strncpy(inode->filename, filename, MAX_FILENAME - 1);
+    inode->filename[MAX_FILENAME - 1] = '\0';
+    strncpy(inode->parent_path, parent_path, MAX_PATH - 1);
+    inode->parent_path[MAX_PATH - 1] = '\0';
+    inode->is_directory = 0;
+    inode->size = size;
+    inode->offset = offset;
+    inode->created = time(NULL);
+    inode->modified = inode->created;
+    mark_inode_dirty(fs, idx);
 
     fseek(fs->container, (long)offset, SEEK_SET);
     char buffer[BLOCK_SIZE];
@@ -440,13 +551,12 @@ int fs_extract_file(FileSystem *fs, const char *fs_path, const char *dest_path) 
         return -1;
     }
 
-    if (fs->inodes[idx].is_directory) {
+    Inode *inode = get_inode(fs, idx);
+    if (!inode || inode->is_directory) {
         fprintf(stderr, "Erreur : '%s' est un répertoire, pas un fichier\n", normalized);
         free(normalized);
         return -1;
     }
-
-    Inode *inode = &fs->inodes[idx];
 
     FILE *dest = fopen(dest_path, "wb");
     if (!dest) {
@@ -491,12 +601,15 @@ int fs_copy_file(FileSystem *fs, const char *src_path, const char *dest_path) {
         return -1;
     }
 
-    if (fs->inodes[src_idx].is_directory) {
+    Inode *src_inode_ptr = get_inode(fs, src_idx);
+    if (src_inode_ptr->is_directory) {
         fprintf(stderr, "Erreur : '%s' est un répertoire, pas un fichier\n", normalized_src);
         free(normalized_src);
         free(normalized_dest);
         return -1;
     }
+    // Copie de l'inode car src_inode_ptr peut être invalidé par get_inode(fs, dest_idx)
+    Inode src_inode_val = *src_inode_ptr;
 
     if (path_exists(fs, normalized_dest, NULL) >= 0) {
         fprintf(stderr, "Erreur : '%s' existe déjà\n", normalized_dest);
@@ -526,46 +639,39 @@ int fs_copy_file(FileSystem *fs, const char *src_path, const char *dest_path) {
     }
 
     uint64_t offset = find_data_end(fs);
-    Inode *src_inode = &fs->inodes[src_idx];
-
-    fseek(fs->container, (long)offset, SEEK_SET);
-    fseek(fs->container, (long)src_inode->offset, SEEK_SET);
 
     char buffer[BLOCK_SIZE];
-    uint64_t remaining = src_inode->size;
-    fseek(fs->container, (long)offset, SEEK_SET);
+    uint64_t remaining = src_inode_val.size;
 
     while (remaining > 0) {
         size_t to_read = (remaining < BLOCK_SIZE) ? (size_t)remaining : BLOCK_SIZE;
-        fseek(fs->container, (long)src_inode->offset + (src_inode->size - remaining), SEEK_SET);
+        fseek(fs->container, (long)src_inode_val.offset + (src_inode_val.size - remaining), SEEK_SET);
         size_t bytes_read = fread(buffer, 1, to_read, fs->container);
-        fseek(fs->container, (long)offset + (src_inode->size - remaining), SEEK_SET);
+        fseek(fs->container, (long)offset + (src_inode_val.size - remaining), SEEK_SET);
         fwrite(buffer, 1, bytes_read, fs->container);
         remaining -= bytes_read;
     }
 
-    strncpy(fs->inodes[dest_idx].filename, filename, MAX_FILENAME - 1);
-    fs->inodes[dest_idx].filename[MAX_FILENAME - 1] = '\0';
-    strncpy(fs->inodes[dest_idx].parent_path, parent_path, MAX_PATH - 1);
-    fs->inodes[dest_idx].parent_path[MAX_PATH - 1] = '\0';
-    fs->inodes[dest_idx].is_directory = 0;
-    fs->inodes[dest_idx].size = src_inode->size;
-    fs->inodes[dest_idx].offset = offset;
-    fs->inodes[dest_idx].created = time(NULL);
-    fs->inodes[dest_idx].modified = fs->inodes[dest_idx].created;
+    Inode *dest_inode = get_inode(fs, dest_idx);
+    strncpy(dest_inode->filename, filename, MAX_FILENAME - 1);
+    dest_inode->filename[MAX_FILENAME - 1] = '\0';
+    strncpy(dest_inode->parent_path, parent_path, MAX_PATH - 1);
+    dest_inode->parent_path[MAX_PATH - 1] = '\0';
+    dest_inode->is_directory = 0;
+    dest_inode->size = src_inode_val.size;
+    dest_inode->offset = offset;
+    dest_inode->created = time(NULL);
+    dest_inode->modified = dest_inode->created;
+    mark_inode_dirty(fs, dest_idx);
 
     fs->sb.num_files++;
 
     printf("Fichier copié : %s -> %s (%lu octets)\n", normalized_src, normalized_dest,
-           (unsigned long)src_inode->size);
+           (unsigned long)src_inode_val.size);
     
     // Ajouter a la hash table pour acces O(1)
     hash_table_insert(fs, normalized_dest, dest_idx);
     
-    fs->sb.num_files++;
-
-    printf("Fichier copié : %s -> %s (%lu octets)\n", normalized_src, normalized_dest,
-           (unsigned long)src_inode->size);
     free(normalized_src);
     free(normalized_dest);
     return 0;
@@ -609,15 +715,17 @@ int fs_move_file(FileSystem *fs, const char *src_path, const char *dest_path) {
         return -1;
     }
 
-    if (!fs->inodes[src_idx].is_directory) {
+    Inode *src_inode = get_inode(fs, src_idx);
+    if (!src_inode->is_directory) {
         // Supprimer l'ancienne entree de la hash table
         hash_table_delete(fs, normalized_src);
         
-        strncpy(fs->inodes[src_idx].filename, filename, MAX_FILENAME - 1);
-        fs->inodes[src_idx].filename[MAX_FILENAME - 1] = '\0';
-        strncpy(fs->inodes[src_idx].parent_path, parent_path, MAX_PATH - 1);
-        fs->inodes[src_idx].parent_path[MAX_PATH - 1] = '\0';
-        fs->inodes[src_idx].modified = time(NULL);
+        strncpy(src_inode->filename, filename, MAX_FILENAME - 1);
+        src_inode->filename[MAX_FILENAME - 1] = '\0';
+        strncpy(src_inode->parent_path, parent_path, MAX_PATH - 1);
+        src_inode->parent_path[MAX_PATH - 1] = '\0';
+        src_inode->modified = time(NULL);
+        mark_inode_dirty(fs, src_idx);
 
         // Ajouter la nouvelle entree a la hash table
         hash_table_insert(fs, normalized_dest, src_idx);
@@ -627,41 +735,44 @@ int fs_move_file(FileSystem *fs, const char *src_path, const char *dest_path) {
         // Supprimer l'ancienne entree de la hash table
         hash_table_delete(fs, normalized_src);
         
-        strncpy(fs->inodes[src_idx].filename, filename, MAX_FILENAME - 1);
-        fs->inodes[src_idx].filename[MAX_FILENAME - 1] = '\0';
-        strncpy(fs->inodes[src_idx].parent_path, parent_path, MAX_PATH - 1);
-        fs->inodes[src_idx].parent_path[MAX_PATH - 1] = '\0';
-        fs->inodes[src_idx].modified = time(NULL);
+        strncpy(src_inode->filename, filename, MAX_FILENAME - 1);
+        src_inode->filename[MAX_FILENAME - 1] = '\0';
+        strncpy(src_inode->parent_path, parent_path, MAX_PATH - 1);
+        src_inode->parent_path[MAX_PATH - 1] = '\0';
+        src_inode->modified = time(NULL);
+        mark_inode_dirty(fs, src_idx);
 
         // Ajouter la nouvelle entree a la hash table
         hash_table_insert(fs, normalized_dest, src_idx);
 
         // Mettre a jour les entrees enfants dans la hash table
         for (int i = 0; i < MAX_FILES; i++) {
-            if (fs->inodes[i].filename[0] != '\0' && i != src_idx) {
-                if (strncmp(fs->inodes[i].parent_path, normalized_src,
+            Inode *inode = get_inode(fs, i);
+            if (inode->filename[0] != '\0' && i != src_idx) {
+                if (strncmp(inode->parent_path, normalized_src,
                            strlen(normalized_src)) == 0) {
                     char old_full_path[MAX_PATH];
-                    snprintf(old_full_path, MAX_PATH, "%s/%s", fs->inodes[i].parent_path,
-                            fs->inodes[i].filename);
+                    snprintf(old_full_path, MAX_PATH, "%s/%s", inode->parent_path,
+                            inode->filename);
                     
                     hash_table_delete(fs, old_full_path);
                     
                     char old_parent[MAX_PATH];
-                    strncpy(old_parent, fs->inodes[i].parent_path, MAX_PATH - 1);
+                    strncpy(old_parent, inode->parent_path, MAX_PATH - 1);
 
                     char new_parent[MAX_PATH];
                     size_t offset = strlen(normalized_src);
                     snprintf(new_parent, MAX_PATH, "%s%s", normalized_dest,
                             old_parent + offset);
 
-                    strncpy(fs->inodes[i].parent_path, new_parent, MAX_PATH - 1);
-                    fs->inodes[i].parent_path[MAX_PATH - 1] = '\0';
+                    strncpy(inode->parent_path, new_parent, MAX_PATH - 1);
+                    inode->parent_path[MAX_PATH - 1] = '\0';
+                    mark_inode_dirty(fs, i);
                     
                     // Ajouter la nouvelle entree a la hash table
                     char new_full_path[MAX_PATH];
                     snprintf(new_full_path, MAX_PATH, "%s/%s", new_parent,
-                            fs->inodes[i].filename);
+                            inode->filename);
                     hash_table_insert(fs, new_full_path, i);
                 }
             }
@@ -683,10 +794,13 @@ void fs_list_recursive(FileSystem *fs, const char *path, int depth) {
     char *normalized = normalize_path(path);
 
     int idx = path_exists(fs, normalized, NULL);
-    if (idx != -1 && !fs->inodes[idx].is_directory) {
-        fprintf(stderr, "Erreur : '%s' n'est pas un répertoire\n", normalized);
-        free(normalized);
-        return;
+    if (idx != -1) {
+        Inode *inode = get_inode(fs, idx);
+        if (inode && !inode->is_directory) {
+            fprintf(stderr, "Erreur : '%s' n'est pas un répertoire\n", normalized);
+            free(normalized);
+            return;
+        }
     }
 
     if (depth == 0) {
@@ -697,23 +811,24 @@ void fs_list_recursive(FileSystem *fs, const char *path, int depth) {
     }
 
     for (int i = 0; i < MAX_FILES; i++) {
-        if (fs->inodes[i].filename[0] != '\0' &&
-            strcmp(fs->inodes[i].parent_path, normalized) == 0) {
+        Inode *inode = get_inode(fs, i);
+        if (inode->filename[0] != '\0' &&
+            strcmp(inode->parent_path, normalized) == 0) {
 
             char time_str[20];
-            struct tm *tm_info = localtime(&fs->inodes[i].modified);
+            struct tm *tm_info = localtime(&inode->modified);
             strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M", tm_info);
 
             char indent[64] = "";
             for (int j = 0; j < depth; j++) strcat(indent, "  ");
 
-            if (fs->inodes[i].is_directory) {
-                printf("%s%-38s %12s %20s\n", indent, fs->inodes[i].filename,
+            if (inode->is_directory) {
+                printf("%s%-38s %12s %20s\n", indent, inode->filename,
                        "[DIR]", time_str);
             } else {
                 printf("%s%-38s %10lu B  %20s\n", indent,
-                       fs->inodes[i].filename,
-                       (unsigned long)fs->inodes[i].size, time_str);
+                       inode->filename,
+                       (unsigned long)inode->size, time_str);
             }
         }
     }
