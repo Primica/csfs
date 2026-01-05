@@ -345,7 +345,7 @@ static void load_from_fs(void) {
 
     // Chercher l'inode
     int idx = -1;
-    for (int i = 0; i < MAX_FILES; i++) {
+    for (int i = 0; i < E.shell->fs->sb.max_files; i++) {
         Inode *inode = get_inode(E.shell->fs, i);
         if (inode->filename[0] != '\0') {
             char full_path[MAX_PATH];

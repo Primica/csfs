@@ -99,7 +99,7 @@ static int complete_paths(Shell *shell, const char *partial, char **suggestions,
     }
 
     // Parcourir les inodes pour trouver les fichiers/répertoires correspondants
-    for (int i = 0; i < MAX_FILES && count < max_count; i++) {
+    for (int i = 0; i < shell->fs->sb.max_files && count < max_count; i++) {
         Inode *inode = get_inode(shell->fs, i);
         if (inode->filename[0] == '\0') continue;
 

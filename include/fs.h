@@ -19,6 +19,7 @@ typedef struct {
     uint32_t num_files;
     uint32_t max_files;
     uint64_t data_offset;
+    uint64_t inode_table_offset;
 } SuperBlock;
 
 typedef struct {

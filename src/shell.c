@@ -214,7 +214,7 @@ static int inode_index_for_path(Shell *shell, const char *path, int *is_dir_out)
         return -1;
     }
 
-    for (int i = 0; i < MAX_FILES; i++) {
+    for (int i = 0; i < shell->fs->sb.max_files; i++) {
         Inode *inode = get_inode(shell->fs, i);
         if (inode->filename[0] != '\0') {
             char full_path[MAX_PATH];
@@ -278,7 +278,7 @@ static int delete_path(Shell *sh, const char *abs_path, int recursive, int force
 
     if (is_dir) {
         int has_child = 0;
-        for (int i = 0; i < MAX_FILES; i++) {
+        for (int i = 0; i < sh->fs->sb.max_files; i++) {
             Inode *inode = get_inode(sh->fs, i);
             if (inode->filename[0] != '\0' &&
                 strcmp(inode->parent_path, abs_path) == 0) {
@@ -291,7 +291,7 @@ static int delete_path(Shell *sh, const char *abs_path, int recursive, int force
         }
 
         if (has_child && recursive) {
-            for (int i = 0; i < MAX_FILES; i++) {
+            for (int i = 0; i < sh->fs->sb.max_files; i++) {
                 Inode *inode = get_inode(sh->fs, i);
                 if (inode->filename[0] != '\0' &&
                     strcmp(inode->parent_path, abs_path) == 0) {

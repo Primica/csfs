@@ -112,7 +112,7 @@ static void collect_fs_info(Shell *shell, int color) {
     unsigned long files = 0, dirs = 0;
     unsigned long long total = 0ULL;
     
-    for (int i = 0; i < MAX_FILES; i++) {
+    for (int i = 0; i < fs->sb.max_files; i++) {
         Inode *inode = get_inode(fs, i);
         if (inode->filename[0] != '\0') {
             if (inode->is_directory) dirs++;

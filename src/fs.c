@@ -81,13 +81,13 @@ static void hash_table_delete(FileSystem *fs, const char *full_path) {
 // --- Gestion du Cache LRU ---
 
 static void write_inode_to_disk(FileSystem *fs, int inode_index, const Inode *inode) {
-    uint64_t offset = sizeof(SuperBlock) + (uint64_t)inode_index * sizeof(Inode);
+    uint64_t offset = fs->sb.inode_table_offset + (uint64_t)inode_index * sizeof(Inode);
     fseek(fs->container, offset, SEEK_SET);
     fwrite(inode, sizeof(Inode), 1, fs->container);
 }
 
 static void read_inode_from_disk(FileSystem *fs, int inode_index, Inode *inode) {
-    uint64_t offset = sizeof(SuperBlock) + (uint64_t)inode_index * sizeof(Inode);
+    uint64_t offset = fs->sb.inode_table_offset + (uint64_t)inode_index * sizeof(Inode);
     fseek(fs->container, offset, SEEK_SET);
     if (fread(inode, sizeof(Inode), 1, fs->container) != 1) {
         memset(inode, 0, sizeof(Inode));
@@ -113,7 +113,7 @@ static void cache_push_front(FileSystem *fs, CacheNode *node) {
 }
 
 Inode* get_inode(FileSystem *fs, int inode_index) {
-    if (inode_index < 0 || inode_index >= MAX_FILES) return NULL;
+    if (inode_index < 0 || inode_index >= fs->sb.max_files) return NULL;
     
     // Chercher dans le cache
     for (int i = 0; i < fs->cache_count; i++) {
@@ -160,7 +160,7 @@ void mark_inode_dirty(FileSystem *fs, int inode_index) {
 // Reconstruit la hash table a partir des inodes actuels
 static void hash_table_rebuild(FileSystem *fs) {
     hash_table_init(fs);
-    for (int i = 0; i < MAX_FILES; i++) {
+    for (int i = 0; i < fs->sb.max_files; i++) {
         Inode inode;
         read_inode_from_disk(fs, i, &inode);
         if (inode.filename[0] != '\0') {
@@ -302,8 +302,23 @@ int fs_create(const char *path) {
         .version = 1,
         .num_files = 0,
         .max_files = MAX_FILES,
-        .data_offset = sizeof(SuperBlock) + (sizeof(Inode) * MAX_FILES)
+        .data_offset = sizeof(SuperBlock),
+        .inode_table_offset = sizeof(SuperBlock) + (sizeof(Inode) * MAX_FILES) // Initialement après les données (qui sont vides)
     };
+
+    // Dans cette version, on met la table d'inodes à la fin pour qu'elle puisse s'étendre
+    // On commence avec une zone de données vide de taille 0 après le SuperBlock.
+    // Mais pour simplifier l'initialisation, on va placer la table d'inodes 
+    // à un offset fixe initial et les données avant.
+    
+    sb.inode_table_offset = sizeof(SuperBlock); 
+    // En fait, si on veut qu'elle soit après la zone de données, 
+    // on doit d'abord savoir où finit la zone de données.
+    // Initialement, data_offset = sizeof(SB)
+    // Et inode_table_offset = data_offset
+    
+    sb.data_offset = sizeof(SuperBlock);
+    sb.inode_table_offset = sb.data_offset;
 
     if (fwrite(&sb, sizeof(SuperBlock), 1, f) != 1) {
         perror("Échec d'écriture du superblock");
@@ -387,23 +402,11 @@ void fs_close(FileSystem *fs) {
     free(fs);
 }
 
-static int find_free_inode(FileSystem *fs) {
-    for (int i = 0; i < MAX_FILES; i++) {
-        Inode inode;
-        read_inode_from_disk(fs, i, &inode);
-        if (inode.filename[0] == '\0') return i;
-    }
-    return -1;
-}
-
 static uint64_t find_data_end(const FileSystem *fs) {
     uint64_t offset = fs->sb.data_offset;
-    for (int i = 0; i < MAX_FILES; i++) {
+    for (int i = 0; i < fs->sb.max_files; i++) {
         Inode inode;
-        // On doit utiliser read_inode_from_disk ici car fs est const dans la signature originale, 
-        // mais FileSystem* n'est pas vraiment const si on doit lire du disque (fseek/fread sur container).
-        // On va tricher un peu sur le const pour l'instant ou changer la signature.
-        uint64_t inode_offset = sizeof(SuperBlock) + (uint64_t)i * sizeof(Inode);
+        uint64_t inode_offset = fs->sb.inode_table_offset + (uint64_t)i * sizeof(Inode);
         fseek(fs->container, inode_offset, SEEK_SET);
         if (fread(&inode, sizeof(Inode), 1, fs->container) == 1) {
             if (inode.filename[0] != '\0' && !inode.is_directory) {
@@ -412,7 +415,54 @@ static uint64_t find_data_end(const FileSystem *fs) {
             }
         }
     }
+    
+    // La table d'inodes occupe aussi de l'espace
+    uint64_t table_end = fs->sb.inode_table_offset + (uint64_t)fs->sb.max_files * sizeof(Inode);
+    if (table_end > offset) offset = table_end;
+    
     return offset;
+}
+
+static int find_free_inode(FileSystem *fs) {
+    for (int i = 0; i < fs->sb.max_files; i++) {
+        Inode inode;
+        read_inode_from_disk(fs, i, &inode);
+        if (inode.filename[0] == '\0') return i;
+    }
+    
+    // Plus d'inode libre, on étend la table
+    int old_max = fs->sb.max_files;
+    int new_max = old_max + 256;
+    
+    // Déplacer la table d'inodes après la fin des données actuelles pour éviter les chevauchements
+    uint64_t data_end = find_data_end(fs);
+    uint64_t new_table_offset = data_end;
+    
+    // Charger tous les anciens inodes et les réécrire au nouvel emplacement
+    Inode *all_inodes = malloc(old_max * sizeof(Inode));
+    for (int i = 0; i < old_max; i++) {
+        read_inode_from_disk(fs, i, &all_inodes[i]);
+    }
+    
+    fs->sb.inode_table_offset = new_table_offset;
+    fs->sb.max_files = new_max;
+    
+    // Réécrire les anciens
+    for (int i = 0; i < old_max; i++) {
+        write_inode_to_disk(fs, i, &all_inodes[i]);
+    }
+    free(all_inodes);
+    
+    // Initialiser les nouveaux
+    Inode empty = {0};
+    for (int i = old_max; i < new_max; i++) {
+        write_inode_to_disk(fs, i, &empty);
+    }
+    
+    printf("Table d'inodes étendue : %d -> %d entrées (nouvel offset: %llu)\n", 
+           old_max, new_max, (unsigned long long)new_table_offset);
+    
+    return old_max; // Le premier nouvel inode libre
 }
 
 int fs_mkdir(FileSystem *fs, const char *path) {
