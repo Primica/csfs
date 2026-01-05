@@ -448,6 +448,19 @@ static int save_to_fs(void) {
                          inode->filename);
             }
             if (strcmp(full_path, resolved) == 0) {
+                // Libérer les blocs
+                if (inode->size > 0) {
+                    uint64_t offset = inode->offset;
+                    uint64_t num_blocks = (inode->size + BLOCK_SIZE - 1) / BLOCK_SIZE;
+                    for (uint64_t j = 0; j < num_blocks; j++) {
+                        uint64_t block_offset = offset + (j * BLOCK_SIZE);
+                        FreeBlock fb;
+                        fb.next_free_block = E.shell->fs->sb.first_free_block;
+                        fseek(E.shell->fs->container, (long)block_offset, SEEK_SET);
+                        fwrite(&fb, sizeof(FreeBlock), 1, E.shell->fs->container);
+                        E.shell->fs->sb.first_free_block = block_offset;
+                    }
+                }
                 inode->filename[0] = '\0';
                 mark_inode_dirty(E.shell->fs, i);
                 E.shell->fs->sb.num_files--;

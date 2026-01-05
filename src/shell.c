@@ -306,6 +306,24 @@ static int delete_path(Shell *sh, const char *abs_path, int recursive, int force
     }
 
     Inode *inode = get_inode(sh->fs, idx);
+    
+    // Si c'est un fichier, libérer ses blocs
+    if (!inode->is_directory && inode->size > 0) {
+        uint64_t offset = inode->offset;
+        uint64_t num_blocks = (inode->size + BLOCK_SIZE - 1) / BLOCK_SIZE;
+        
+        for (uint64_t i = 0; i < num_blocks; i++) {
+            uint64_t block_offset = offset + (i * BLOCK_SIZE);
+            FreeBlock fb;
+            fb.next_free_block = sh->fs->sb.first_free_block;
+            
+            fseek(sh->fs->container, (long)block_offset, SEEK_SET);
+            fwrite(&fb, sizeof(FreeBlock), 1, sh->fs->container);
+            
+            sh->fs->sb.first_free_block = block_offset;
+        }
+    }
+
     inode->filename[0] = '\0';
     mark_inode_dirty(sh->fs, idx);
     sh->fs->sb.num_files--;

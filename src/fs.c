@@ -319,6 +319,7 @@ int fs_create(const char *path) {
     
     sb.data_offset = sizeof(SuperBlock);
     sb.inode_table_offset = sb.data_offset;
+    sb.first_free_block = 0; // Aucun bloc libre au départ
 
     if (fwrite(&sb, sizeof(SuperBlock), 1, f) != 1) {
         perror("Échec d'écriture du superblock");
@@ -551,6 +552,60 @@ int fs_add_file(FileSystem *fs, const char *fs_path, const char *source_path) {
     uint64_t size = (uint64_t)ftell(src);
     fseek(src, 0, SEEK_SET);
 
+    uint64_t num_blocks_needed = (size + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    uint64_t offset = 0;
+
+    // Chercher dans la free list (First-fit)
+    // Note: Pour simplifier, on cherche un bloc contigu si possible, 
+    // ou on prend juste le premier si le fichier tient dans un bloc.
+    // Si le fichier fait plusieurs blocs, on a besoin de blocs contigus 
+    // car l'inode n'a qu'un seul offset.
+    // Algorithme: Chercher une séquence de blocs libres contigus.
+    
+    if (num_blocks_needed > 0) {
+        // Pour l'instant on ne gère que la réutilisation d'un seul bloc libre 
+        // ou on continue à la fin si on ne trouve pas de séquence contigüe.
+        // C'est une limitation due à la structure de l'Inode (un seul offset).
+        
+        uint64_t current = fs->sb.first_free_block;
+        uint64_t prev = 0;
+        
+        while (current != 0) {
+            // Vérifier si on a assez de blocs contigus à partir de 'current'
+            // Dans cette implémentation simple, on ne réutilise un bloc 
+            // que si le fichier tient dans un seul bloc et que le bloc est libre.
+            if (num_blocks_needed == 1) {
+                offset = current;
+                // Retirer de la liste
+                FreeBlock fb;
+                fseek(fs->container, (long)current, SEEK_SET);
+                fread(&fb, sizeof(FreeBlock), 1, fs->container);
+                
+                if (prev == 0) {
+                    fs->sb.first_free_block = fb.next_free_block;
+                } else {
+                    FreeBlock prev_fb;
+                    fseek(fs->container, (long)prev, SEEK_SET);
+                    fread(&prev_fb, sizeof(FreeBlock), 1, fs->container);
+                    prev_fb.next_free_block = fb.next_free_block;
+                    fseek(fs->container, (long)prev, SEEK_SET);
+                    fwrite(&prev_fb, sizeof(FreeBlock), 1, fs->container);
+                }
+                break;
+            }
+            // Passer au suivant
+            FreeBlock fb;
+            fseek(fs->container, (long)current, SEEK_SET);
+            fread(&fb, sizeof(FreeBlock), 1, fs->container);
+            prev = current;
+            current = fb.next_free_block;
+        }
+    }
+
+    if (offset == 0) {
+        offset = find_data_end(fs);
+    }
+
     int idx = find_free_inode(fs);
     if (idx == -1) {
         fclose(src);
@@ -558,8 +613,6 @@ int fs_add_file(FileSystem *fs, const char *fs_path, const char *source_path) {
         free(normalized);
         return -1;
     }
-
-    uint64_t offset = find_data_end(fs);
 
     Inode *inode = get_inode(fs, idx);
     strncpy(inode->filename, filename, MAX_FILENAME - 1);

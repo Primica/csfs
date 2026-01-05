@@ -20,7 +20,12 @@ typedef struct {
     uint32_t max_files;
     uint64_t data_offset;
     uint64_t inode_table_offset;
+    uint64_t first_free_block; // Offset du premier bloc libre (0 si aucun)
 } SuperBlock;
+
+typedef struct {
+    uint64_t next_free_block; // Offset du bloc libre suivant
+} FreeBlock;
 
 typedef struct {
     char filename[MAX_FILENAME];
