@@ -21,6 +21,7 @@ typedef struct {
     uint64_t data_offset;
     uint64_t inode_table_offset;
     uint64_t first_free_block; // Offset du premier bloc libre (0 si aucun)
+    char padding[4056];        // Aligner sur 4096 octets
 } SuperBlock;
 
 typedef struct {
@@ -35,6 +36,17 @@ typedef struct {
     uint64_t offset;
     time_t created;
     time_t modified;
+    time_t accessed;              // NOUVEAU : dernier acces
+    uint32_t uid;                 // NOUVEAU : proprietaire
+    uint32_t gid;                 // NOUVEAU : groupe
+    uint32_t mode;                // NOUVEAU : permissions Unix
+    uint32_t link_count;          // NOUVEAU : nombre de hard links
+    uint64_t inode_number;        // NOUVEAU : numero unique
+    char checksum[32];            // NOUVEAU : SHA256 du contenu
+    uint32_t compression;         // NOUVEAU : type de compression
+    uint32_t encryption;          // NOUVEAU : type de chiffrement
+    uint32_t flags;               // NOUVEAU : flags divers
+    char reserved[64];            // Reserve pour extensions futures
 } Inode;
 
 typedef struct {

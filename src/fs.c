@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 
 // Fonction de hash simple pour les chemins
 static uint32_t hash_path(const char *path) {
@@ -273,9 +274,13 @@ static int path_exists(FileSystem *fs, const char *path, int *is_dir) {
     
     int idx = hash_table_lookup(fs, normalized);
     if (idx >= 0) {
-        if (is_dir) {
-            Inode *inode = get_inode(fs, idx);
-            *is_dir = inode ? inode->is_directory : 0;
+        Inode *inode = get_inode(fs, idx);
+        if (inode) {
+            inode->accessed = time(NULL);
+            mark_inode_dirty(fs, idx);
+            if (is_dir) {
+                *is_dir = inode->is_directory;
+            }
         }
         free(normalized);
         return idx;
@@ -297,29 +302,22 @@ int fs_create(const char *path) {
         return -1;
     }
 
-    SuperBlock sb = {
-        .magic = FS_MAGIC,
-        .version = 1,
-        .num_files = 0,
-        .max_files = MAX_FILES,
-        .data_offset = sizeof(SuperBlock),
-        .inode_table_offset = sizeof(SuperBlock) + (sizeof(Inode) * MAX_FILES) // Initialement après les données (qui sont vides)
-    };
-
-    // Dans cette version, on met la table d'inodes à la fin pour qu'elle puisse s'étendre
-    // On commence avec une zone de données vide de taille 0 après le SuperBlock.
-    // Mais pour simplifier l'initialisation, on va placer la table d'inodes 
-    // à un offset fixe initial et les données avant.
+    SuperBlock sb = {0};
+    sb.magic = FS_MAGIC;
+    sb.version = 2; // Nouvelle version avec alignement et métadonnées riches
+    sb.num_files = 0;
+    sb.max_files = MAX_FILES;
     
-    sb.inode_table_offset = sizeof(SuperBlock); 
-    // En fait, si on veut qu'elle soit après la zone de données, 
-    // on doit d'abord savoir où finit la zone de données.
-    // Initialement, data_offset = sizeof(SB)
-    // Et inode_table_offset = data_offset
+    // Aligner la table d'inodes sur 4096 octets
+    // Le SuperBlock fait 4096 octets grâce au padding
+    sb.inode_table_offset = sizeof(SuperBlock);
     
-    sb.data_offset = sizeof(SuperBlock);
-    sb.inode_table_offset = sb.data_offset;
-    sb.first_free_block = 0; // Aucun bloc libre au départ
+    // Aligner la zone de données après la table d'inodes initiale
+    uint64_t inode_table_size = (uint64_t)MAX_FILES * sizeof(Inode);
+    uint64_t aligned_inode_table_size = (inode_table_size + 4095) & ~4095ULL;
+    sb.data_offset = sb.inode_table_offset + aligned_inode_table_size;
+    
+    sb.first_free_block = 0;
 
     if (fwrite(&sb, sizeof(SuperBlock), 1, f) != 1) {
         perror("Échec d'écriture du superblock");
@@ -327,6 +325,8 @@ int fs_create(const char *path) {
         return -1;
     }
 
+    // Initialiser la table d'inodes avec des zéros (jusqu'à l'offset de données)
+    fseek(f, sb.inode_table_offset, SEEK_SET);
     Inode empty = {0};
     for (int i = 0; i < MAX_FILES; i++) {
         if (fwrite(&empty, sizeof(Inode), 1, f) != 1) {
@@ -335,9 +335,18 @@ int fs_create(const char *path) {
             return -1;
         }
     }
+    
+    // Remplir le reste de l'alignement de la table d'inodes avec des zéros si nécessaire
+    long current_pos = ftell(f);
+    if ((uint64_t)current_pos < sb.data_offset) {
+        uint64_t remaining = sb.data_offset - (uint64_t)current_pos;
+        char *zero_buf = calloc(1, remaining);
+        fwrite(zero_buf, 1, remaining, f);
+        free(zero_buf);
+    }
 
     fclose(f);
-    printf("Système de fichiers créé : %s\n", path);
+    printf("Système de fichiers créé : %s (Aligné sur 4096 octets)\n", path);
     return 0;
 }
 
@@ -421,7 +430,8 @@ static uint64_t find_data_end(const FileSystem *fs) {
     uint64_t table_end = fs->sb.inode_table_offset + (uint64_t)fs->sb.max_files * sizeof(Inode);
     if (table_end > offset) offset = table_end;
     
-    return offset;
+    // Aligner la fin sur 4096 octets pour le prochain fichier
+    return (offset + 4095) & ~4095ULL;
 }
 
 static int find_free_inode(FileSystem *fs) {
@@ -503,6 +513,12 @@ int fs_mkdir(FileSystem *fs, const char *path) {
     inode->offset = 0;
     inode->created = time(NULL);
     inode->modified = inode->created;
+    inode->accessed = inode->created;
+    inode->uid = getuid();
+    inode->gid = getgid();
+    inode->mode = 0755;
+    inode->link_count = 1;
+    inode->inode_number = idx;
     mark_inode_dirty(fs, idx);
 
     fs->sb.num_files++;
@@ -624,6 +640,12 @@ int fs_add_file(FileSystem *fs, const char *fs_path, const char *source_path) {
     inode->offset = offset;
     inode->created = time(NULL);
     inode->modified = inode->created;
+    inode->accessed = inode->created;
+    inode->uid = getuid();
+    inode->gid = getgid();
+    inode->mode = 0644;
+    inode->link_count = 1;
+    inode->inode_number = idx;
     mark_inode_dirty(fs, idx);
 
     fseek(fs->container, (long)offset, SEEK_SET);
@@ -660,6 +682,9 @@ int fs_extract_file(FileSystem *fs, const char *fs_path, const char *dest_path) 
         free(normalized);
         return -1;
     }
+    
+    inode->accessed = time(NULL);
+    mark_inode_dirty(fs, idx);
 
     FILE *dest = fopen(dest_path, "wb");
     if (!dest) {
